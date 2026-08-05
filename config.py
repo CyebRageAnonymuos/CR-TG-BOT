@@ -24,17 +24,6 @@ SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "CYBRSupport")
 
 # تنظیمات سیستم رفرال (دعوت دوستان)
 REFERRAL_REQUIRED_COUNT = int(os.getenv("REFERRAL_REQUIRED_COUNT", "3"))   # تعداد خرید موفق لازم
-REFERRAL_REWARD_VOLUME = int(os.getenv("REFERRAL_REWARD_VOLUME", "50"))   # حجم هدیه گیمینگ (گیگ)
-
-# تعرفه‌های پیش‌فرض سرویس گیمینگ - فقط در اولین اجرا (وقتی دیتابیس خالیه) استفاده میشه
-# بعد از اون، قیمت‌ها از دیتابیس خونده میشن و از طریق دستور ادمین توی خود ربات قابل تغییرن
-DEFAULT_GAMING_PLANS = [
-    (10, 70000),
-    (20, 140000),
-    (30, 210000),
-    (40, 280000),
-    (50, 350000),
-]
 
 # تعرفه‌های پیش‌فرض سرویس مولتی لوکیشن (وبگردی) - فقط در اولین اجرا استفاده میشه
 DEFAULT_MULTI_PLANS = [

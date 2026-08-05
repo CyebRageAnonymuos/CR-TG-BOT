@@ -50,24 +50,6 @@ async def init_db():
         )
         await db.execute(
             """
-            CREATE TABLE IF NOT EXISTS reward_claims (
-                referrer_id INTEGER PRIMARY KEY,
-                claimed_at TEXT
-            )
-            """
-        )
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS gaming_plans (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                volume_gb INTEGER NOT NULL,
-                price INTEGER NOT NULL,
-                active INTEGER DEFAULT 1
-            )
-            """
-        )
-        await db.execute(
-            """
             CREATE TABLE IF NOT EXISTS multi_plans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 label TEXT NOT NULL,
@@ -177,15 +159,6 @@ async def init_db():
 
         # اولین اجرا: اگه جدول‌های تعرفه خالی بودن، از مقادیر پیش‌فرض config.py پر می‌شن
         import config
-
-        cursor = await db.execute("SELECT COUNT(*) FROM gaming_plans")
-        row = await cursor.fetchone()
-        if row[0] == 0:
-            for volume, price in config.DEFAULT_GAMING_PLANS:
-                await db.execute(
-                    "INSERT INTO gaming_plans (volume_gb, price, active) VALUES (?, ?, 1)", (volume, price)
-                )
-            await db.commit()
 
         cursor = await db.execute("SELECT COUNT(*) FROM multi_plans")
         row = await cursor.fetchone()
@@ -331,69 +304,6 @@ async def count_converted_referrals(referrer_id: int) -> int:
         return row[0] if row else 0
 
 
-async def has_claimed_reward(referrer_id: int) -> bool:
-    async with _open_db() as db:
-        cursor = await db.execute("SELECT 1 FROM reward_claims WHERE referrer_id = ?", (referrer_id,))
-        return await cursor.fetchone() is not None
-
-
-async def set_reward_claimed(referrer_id: int):
-    async with _open_db() as db:
-        await db.execute(
-            "INSERT OR IGNORE INTO reward_claims (referrer_id, claimed_at) VALUES (?, ?)",
-            (referrer_id, datetime.now().isoformat()),
-        )
-        await db.commit()
-
-
-# ---------- Gaming plans (تعرفه سرویس گیمینگ) ----------
-async def get_gaming_plans(active_only: bool = True):
-    async with _open_db() as db:
-        db.row_factory = aiosqlite.Row
-        query = "SELECT * FROM gaming_plans"
-        if active_only:
-            query += " WHERE active = 1"
-        query += " ORDER BY volume_gb ASC"
-        cursor = await db.execute(query)
-        return await cursor.fetchall()
-
-
-async def get_gaming_plan(plan_id: int):
-    async with _open_db() as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute("SELECT * FROM gaming_plans WHERE id = ?", (plan_id,))
-        return await cursor.fetchone()
-
-
-async def get_gaming_plan_by_volume(volume_gb: int):
-    async with _open_db() as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM gaming_plans WHERE volume_gb = ? ORDER BY id LIMIT 1", (volume_gb,)
-        )
-        return await cursor.fetchone()
-
-
-async def update_gaming_price(plan_id: int, new_price: int):
-    async with _open_db() as db:
-        await db.execute("UPDATE gaming_plans SET price = ? WHERE id = ?", (new_price, plan_id))
-        await db.commit()
-
-
-async def toggle_gaming_active(plan_id: int):
-    async with _open_db() as db:
-        await db.execute("UPDATE gaming_plans SET active = 1 - active WHERE id = ?", (plan_id,))
-        await db.commit()
-
-
-async def add_gaming_plan(volume_gb: int, price: int):
-    async with _open_db() as db:
-        await db.execute(
-            "INSERT INTO gaming_plans (volume_gb, price, active) VALUES (?, ?, 1)", (volume_gb, price)
-        )
-        await db.commit()
-
-
 # ---------- Multi-location plans (تعرفه سرویس مولتی لوکیشن) ----------
 async def get_multi_plans(active_only: bool = True):
     async with _open_db() as db:
@@ -456,18 +366,6 @@ async def get_welcome_message():
 
 async def set_welcome_message(text: str) -> None:
     await set_setting("welcome_message", text)
-
-
-async def get_referral_required_count() -> int:
-    import config
-    val = await get_setting("referral_required_count")
-    return int(val) if val is not None else config.REFERRAL_REQUIRED_COUNT
-
-
-async def get_referral_reward_volume() -> int:
-    import config
-    val = await get_setting("referral_reward_volume")
-    return int(val) if val is not None else config.REFERRAL_REWARD_VOLUME
 
 
 async def get_rules_text():

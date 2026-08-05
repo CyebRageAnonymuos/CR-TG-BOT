@@ -66,10 +66,7 @@ class WalletStates(StatesGroup):
 class AdminStates(StatesGroup):
     waiting_for_panel_info = State()
     waiting_for_reject_reason = State()
-    editing_gaming_price = State()
     editing_multi_price = State()
-    adding_gaming_volume = State()
-    adding_gaming_price = State()
     adding_multi_label = State()
     adding_multi_price = State()
     editing_welcome_message = State()
@@ -102,26 +99,9 @@ def back_menu_kb() -> InlineKeyboardMarkup:
 
 def services_kb() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text="🎮 سرویس گیمینگ", callback_data="svc:gaming")],
         [InlineKeyboardButton(text="🌍 سرویس مولتی لوکیشن (وبگردی)", callback_data="svc:multi")],
         [InlineKeyboardButton(text="🔙 بازگشت به منو", callback_data="back:menu")],
     ]
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def gaming_plans_kb(plans) -> InlineKeyboardMarkup:
-    rows = []
-    row = []
-    for p in plans:
-        row.append(
-            InlineKeyboardButton(text=f"{p['volume_gb']} گیگ - {p['price']:,} تومان", callback_data=f"gplan:{p['id']}")
-        )
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="back:services")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -136,7 +116,6 @@ def multi_plans_kb(plans) -> InlineKeyboardMarkup:
 
 async def build_order_summary_kb(order) -> InlineKeyboardMarkup:
     """کیبورد صفحه خلاصه سفارش: ارسال رسید، کد تخفیف، پرداخت با کیف پول (در صورت کافی بودن موجودی) یا بازگشت."""
-    kind = "gaming" if str(order["plan_name"]).startswith("🎮") else "multi"
     rows = [[InlineKeyboardButton(text="📤 ارسال رسید", callback_data=f"reqreceipt:{order['id']}")]]
 
     if order["coupon_code"]:
@@ -156,7 +135,7 @@ async def build_order_summary_kb(order) -> InlineKeyboardMarkup:
                 [InlineKeyboardButton(text=f"💰 پرداخت با کیف پول ({balance:,} تومان)", callback_data=f"walletpay:{order['id']}")]
             )
 
-    rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"cancelorder:{order['id']}:{kind}")])
+    rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"cancelorder:{order['id']}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -229,7 +208,6 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             f"✨ <b>{config.BRAND_NAME}</b> ✨\n\n"
             f"👋 به پلتفرم فروش سرویس {config.BRAND_NAME} خوش اومدید\n\n"
             f"🎁 <b>چی دریافت می‌کنید؟</b>\n"
-            f"🎮 سرویس گیمینگ با حجم دلخواه\n"
             f"🌍 سرویس مولتی لوکیشن (وبگردی) با پلن نامحدود\n\n"
             f"🟢 سرویس فعال دارید؟ از دکمه «🖥 سرویس‌های من» وارد شوید"
         )
@@ -260,43 +238,22 @@ async def back_to_services(callback: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("cancelorder:"))
 async def cancel_order_and_go_back(callback: CallbackQuery, state: FSMContext):
-    """کاربر از صفحه خلاصه سفارش «بازگشت» رو زده -> سفارش لغو میشه و به لیست تعرفه‌های همون سرویس برمی‌گرده."""
-    _, order_id_str, kind = callback.data.split(":")
+    """کاربر از صفحه خلاصه سفارش «بازگشت» رو زده -> سفارش لغو میشه و به لیست تعرفه‌های سرویس برمی‌گرده."""
+    _, order_id_str = callback.data.split(":")
     order_id = int(order_id_str)
     order = await db.get_order(order_id)
     if order and order["user_id"] == callback.from_user.id and order["status"] in ("awaiting_receipt", "pending"):
         await db.set_order_status(order_id, "cancelled")
     await state.clear()
 
-    if kind == "gaming":
-        plans = await db.get_gaming_plans()
-        if not plans:
-            await callback.answer("در حال حاضر تعرفه‌ای برای این سرویس ثبت نشده.", show_alert=True)
-            return
-        await callback.message.edit_text(
-            "🎮 <b>سرویس گیمینگ</b>\nحجم مورد نظر رو انتخاب کنید:", parse_mode="HTML", reply_markup=gaming_plans_kb(plans)
-        )
-    else:
-        plans = await db.get_multi_plans()
-        if not plans:
-            await callback.answer("در حال حاضر تعرفه‌ای برای این سرویس ثبت نشده.", show_alert=True)
-            return
-        await callback.message.edit_text(
-            "🌍 <b>سرویس مولتی لوکیشن (وبگردی)</b>\nتعرفه مورد نظر رو انتخاب کنید:",
-            parse_mode="HTML",
-            reply_markup=multi_plans_kb(plans),
-        )
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "svc:gaming")
-async def choose_gaming_service(callback: CallbackQuery, state: FSMContext):
-    plans = await db.get_gaming_plans()
+    plans = await db.get_multi_plans()
     if not plans:
         await callback.answer("در حال حاضر تعرفه‌ای برای این سرویس ثبت نشده.", show_alert=True)
         return
     await callback.message.edit_text(
-        "🎮 <b>سرویس گیمینگ</b>\nحجم مورد نظر رو انتخاب کنید:", parse_mode="HTML", reply_markup=gaming_plans_kb(plans)
+        "🌍 <b>سرویس مولتی لوکیشن (وبگردی)</b>\nتعرفه مورد نظر رو انتخاب کنید:",
+        parse_mode="HTML",
+        reply_markup=multi_plans_kb(plans),
     )
     await callback.answer()
 
@@ -311,33 +268,6 @@ async def choose_multi_service(callback: CallbackQuery, state: FSMContext):
         "🌍 <b>سرویس مولتی لوکیشن (وبگردی)</b>\nتعرفه مورد نظر رو انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=multi_plans_kb(plans),
-    )
-    await callback.answer()
-
-
-@dp.callback_query(F.data.startswith("gplan:"))
-async def choose_gaming_plan(callback: CallbackQuery, state: FSMContext):
-    plan_id = int(callback.data.split(":")[1])
-    plan = await db.get_gaming_plan(plan_id)
-    if not plan or not plan["active"]:
-        await callback.answer("این تعرفه دیگر موجود نیست.", show_alert=True)
-        return
-
-    plan_name = f"🎮 سرویس گیمینگ - {plan['volume_gb']} گیگ"
-
-    order_id = await db.create_order(
-        user_id=callback.from_user.id,
-        username=callback.from_user.username or "",
-        full_name=callback.from_user.full_name,
-        plan_id=plan_id,
-        plan_name=plan_name,
-        price=plan["price"],
-    )
-
-    await state.clear()
-    order = await db.get_order(order_id)
-    await callback.message.edit_text(
-        order_summary_text(order), parse_mode="HTML", reply_markup=await build_order_summary_kb(order)
     )
     await callback.answer()
 
@@ -967,7 +897,6 @@ async def invite_handler(message: Message, state: FSMContext):
 def admin_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🎮 تعرفه‌های گیمینگ", callback_data="admintariff:gaming")],
             [InlineKeyboardButton(text="🌍 تعرفه‌های مولتی لوکیشن", callback_data="admintariff:multi")],
             [InlineKeyboardButton(text="✉️ پیام خوش‌آمدگویی", callback_data="adminwelcome")],
             [InlineKeyboardButton(text="📜 ویرایش قوانین", callback_data="adminrules")],
@@ -977,28 +906,6 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🔙 بازگشت به منو", callback_data="back:menu")],
         ]
     )
-
-
-async def gaming_admin_list_kb() -> InlineKeyboardMarkup:
-    plans = await db.get_gaming_plans(active_only=False)
-    rows = []
-    for p in plans:
-        status = "✅" if p["active"] else "🚫"
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"{status} {p['volume_gb']} گیگ - {p['price']:,} تومان",
-                    callback_data=f"gpriceedit:{p['id']}",
-                ),
-                InlineKeyboardButton(
-                    text="غیرفعال" if p["active"] else "فعال",
-                    callback_data=f"gtoggle:{p['id']}",
-                ),
-            ]
-        )
-    rows.append([InlineKeyboardButton(text="➕ افزودن تعرفه جدید", callback_data="gadd")])
-    rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="admintariff:root")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def multi_admin_list_kb() -> InlineKeyboardMarkup:
@@ -1364,19 +1271,6 @@ async def save_wallet_bonus_percent(message: Message, state: FSMContext):
     await message.answer("✅ درصد هدیه با موفقیت بروزرسانی شد.", reply_markup=wallet_bonus_kb())
 
 
-@dp.callback_query(F.data == "admintariff:gaming")
-async def admintariff_gaming(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id not in config.ADMIN_IDS:
-        await callback.answer("شما دسترسی ادمین ندارید.", show_alert=True)
-        return
-    await callback.message.edit_text(
-        "🎮 <b>تعرفه‌های سرویس گیمینگ</b>\nروی هر تعرفه بزنید تا قیمتش رو تغییر بدید، یا فعال/غیرفعالش کنید:",
-        parse_mode="HTML",
-        reply_markup=await gaming_admin_list_kb(),
-    )
-    await callback.answer()
-
-
 @dp.callback_query(F.data == "admintariff:multi")
 async def admintariff_multi(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in config.ADMIN_IDS:
@@ -1390,17 +1284,6 @@ async def admintariff_multi(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@dp.callback_query(F.data.startswith("gtoggle:"))
-async def toggle_gaming(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id not in config.ADMIN_IDS:
-        await callback.answer("شما دسترسی ادمین ندارید.", show_alert=True)
-        return
-    plan_id = int(callback.data.split(":")[1])
-    await db.toggle_gaming_active(plan_id)
-    await callback.message.edit_reply_markup(reply_markup=await gaming_admin_list_kb())
-    await callback.answer("وضعیت تعرفه تغییر کرد.")
-
-
 @dp.callback_query(F.data.startswith("mtoggle:"))
 async def toggle_multi(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in config.ADMIN_IDS:
@@ -1410,37 +1293,6 @@ async def toggle_multi(callback: CallbackQuery, state: FSMContext):
     await db.toggle_multi_active(plan_id)
     await callback.message.edit_reply_markup(reply_markup=await multi_admin_list_kb())
     await callback.answer("وضعیت تعرفه تغییر کرد.")
-
-
-@dp.callback_query(F.data.startswith("gpriceedit:"))
-async def start_edit_gaming_price(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id not in config.ADMIN_IDS:
-        await callback.answer("شما دسترسی ادمین ندارید.", show_alert=True)
-        return
-    plan_id = int(callback.data.split(":")[1])
-    plan = await db.get_gaming_plan(plan_id)
-    if not plan:
-        await callback.answer("این تعرفه پیدا نشد.", show_alert=True)
-        return
-    await state.update_data(plan_id=plan_id)
-    await state.set_state(AdminStates.editing_gaming_price)
-    await callback.message.answer(
-        f"قیمت جدید برای «{plan['volume_gb']} گیگ» رو به تومان بفرستید (فقط عدد):"
-    )
-    await callback.answer()
-
-
-@dp.message(AdminStates.editing_gaming_price)
-async def save_gaming_price(message: Message, state: FSMContext):
-    text = (message.text or "").replace(",", "").strip()
-    if not text.isdigit():
-        await message.answer("لطفاً فقط عدد بفرستید (مثال: 80000)")
-        return
-    data = await state.get_data()
-    plan_id = data.get("plan_id")
-    await db.update_gaming_price(plan_id, int(text))
-    await state.clear()
-    await message.answer("✅ قیمت با موفقیت بروزرسانی شد.", reply_markup=await gaming_admin_list_kb())
 
 
 @dp.callback_query(F.data.startswith("mpriceedit:"))
@@ -1472,40 +1324,6 @@ async def save_multi_price(message: Message, state: FSMContext):
     await db.update_multi_price(plan_id, int(text))
     await state.clear()
     await message.answer("✅ قیمت با موفقیت بروزرسانی شد.", reply_markup=await multi_admin_list_kb())
-
-
-@dp.callback_query(F.data == "gadd")
-async def start_add_gaming(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id not in config.ADMIN_IDS:
-        await callback.answer("شما دسترسی ادمین ندارید.", show_alert=True)
-        return
-    await state.set_state(AdminStates.adding_gaming_volume)
-    await callback.message.answer("حجم تعرفه جدید رو به گیگابایت بفرستید (فقط عدد، مثال: 60):")
-    await callback.answer()
-
-
-@dp.message(AdminStates.adding_gaming_volume)
-async def add_gaming_volume(message: Message, state: FSMContext):
-    text = (message.text or "").strip()
-    if not text.isdigit():
-        await message.answer("لطفاً فقط عدد بفرستید (مثال: 60)")
-        return
-    await state.update_data(volume=int(text))
-    await state.set_state(AdminStates.adding_gaming_price)
-    await message.answer("حالا قیمت این تعرفه رو به تومان بفرستید:")
-
-
-@dp.message(AdminStates.adding_gaming_price)
-async def add_gaming_price(message: Message, state: FSMContext):
-    text = (message.text or "").replace(",", "").strip()
-    if not text.isdigit():
-        await message.answer("لطفاً فقط عدد بفرستید (مثال: 400000)")
-        return
-    data = await state.get_data()
-    volume = data.get("volume")
-    await db.add_gaming_plan(volume, int(text))
-    await state.clear()
-    await message.answer("✅ تعرفه جدید اضافه شد.", reply_markup=await gaming_admin_list_kb())
 
 
 @dp.callback_query(F.data == "madd")
