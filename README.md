@@ -12,7 +12,7 @@ A complete Telegram reseller bot for selling VPN/panel services with **card-to-c
 
 | | |
 |---|---|
-| 🛍️ **Two service types** | Gaming plans (volume-based) + Multi-location plans (user-based) |
+| 🛍️ **Service type** | Multi-location plans (web browsing, unlimited usage) |
 | 💳 **Card-to-card payment** | Receipt upload → admin approval → auto delivery |
 | 💰 **Built-in wallet** | Instant wallet payment, admin top-up approval, tiered recharge bonus |
 | 🤝 **Permanent referral commission** | % of every successful purchase credited instantly to the referrer's wallet |
@@ -81,8 +81,7 @@ Then set these **Variables** in the project:
 | `DB_PATH` | `/data/bot.db` (see volume step) |
 | `BRAND_NAME` | Brand shown in welcome message (default `CR`) |
 | `SUPPORT_USERNAME` | Support username without `@` (default `CYBRSupport`) |
-| `REFERRAL_REQUIRED_COUNT` | Successful purchases needed for the referral gift (default `3`) |
-| `REFERRAL_REWARD_VOLUME` | Gift volume in GB (default `50`) |
+| `REFERRAL_REQUIRED_COUNT` | Successful purchases needed to activate the referral reward (default `3`) |
 
 ### 💾 Database persistence (IMPORTANT)
 
@@ -104,7 +103,7 @@ The bot is now **crash-proof**: it auto-creates the database directory on startu
 
 ## 🛒 Purchase Flow
 
-`Buy Service` → pick service (Gaming / Multi-location) → pick tariff → order summary + card number with buttons:
+`Buy Service` → pick tariff → order summary + card number with buttons:
 **📤 Send Receipt** · **💰 Pay with Wallet** (if balance is enough) · **🔙 Back**
 
 Admin gets the order with **✅ Approve / ❌ Reject** buttons. After approval, the admin sends the panel/config info and the bot **delivers it automatically** to the buyer.
