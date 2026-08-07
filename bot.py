@@ -99,7 +99,7 @@ def back_menu_kb() -> InlineKeyboardMarkup:
 
 def services_kb() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text="🌍 سرویس مولتی لوکیشن (وبگردی)", callback_data="svc:multi")],
+        [InlineKeyboardButton(text="🌍 سرویس ها)", callback_data="svc:multi")],
         [InlineKeyboardButton(text="🔙 بازگشت به منو", callback_data="back:menu")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -208,7 +208,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             f"✨ <b>{config.BRAND_NAME}</b> ✨\n\n"
             f"👋 به پلتفرم فروش سرویس {config.BRAND_NAME} خوش اومدید\n\n"
             f"🎁 <b>چی دریافت می‌کنید؟</b>\n"
-            f"🌍 سرویس مولتی لوکیشن (وبگردی) با پلن نامحدود\n\n"
+            f"🌍 سرویس های پر سرعت\n\n"
             f"🟢 سرویس فعال دارید؟ از دکمه «🖥 سرویس‌های من» وارد شوید"
         )
     await message.answer(text, parse_mode="HTML", reply_markup=main_menu_kb(message.from_user.id))
@@ -251,7 +251,7 @@ async def cancel_order_and_go_back(callback: CallbackQuery, state: FSMContext):
         await callback.answer("در حال حاضر تعرفه‌ای برای این سرویس ثبت نشده.", show_alert=True)
         return
     await callback.message.edit_text(
-        "🌍 <b>سرویس مولتی لوکیشن (وبگردی)</b>\nتعرفه مورد نظر رو انتخاب کنید:",
+        "🌍 <b>سرویس های پرسرعت (همراه اول)</b>\nتعرفه مورد نظر رو انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=multi_plans_kb(plans),
     )
@@ -265,7 +265,7 @@ async def choose_multi_service(callback: CallbackQuery, state: FSMContext):
         await callback.answer("در حال حاضر تعرفه‌ای برای این سرویس ثبت نشده.", show_alert=True)
         return
     await callback.message.edit_text(
-        "🌍 <b>سرویس مولتی لوکیشن (وبگردی)</b>\nتعرفه مورد نظر رو انتخاب کنید:",
+        "🌍 <b>سرویس پرسرعت (همراه اول)</b>\nتعرفه مورد نظر رو انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=multi_plans_kb(plans),
     )
@@ -280,7 +280,7 @@ async def choose_multi_plan(callback: CallbackQuery, state: FSMContext):
         await callback.answer("این تعرفه دیگر موجود نیست.", show_alert=True)
         return
 
-    plan_name = f"🌍 سرویس مولتی لوکیشن - {plan['label']}"
+    plan_name = f"🌍 سرویس ها - {plan['label']}"
 
     order_id = await db.create_order(
         user_id=callback.from_user.id,
