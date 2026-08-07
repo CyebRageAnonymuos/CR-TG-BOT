@@ -265,7 +265,7 @@ async def choose_multi_service(callback: CallbackQuery, state: FSMContext):
         await callback.answer("در حال حاضر تعرفه‌ای برای این سرویس ثبت نشده.", show_alert=True)
         return
     await callback.message.edit_text(
-        "🌍 <b>سرویس پرسرعت (همراه اول)</b>\nتعرفه مورد نظر رو انتخاب کنید:",
+        "🌍 <b>سرویس های پرسرعت</b>\nتعرفه مورد نظر رو انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=multi_plans_kb(plans),
     )
