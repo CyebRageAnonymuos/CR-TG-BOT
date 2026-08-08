@@ -219,9 +219,17 @@ async def init_db():
         cursor = await db.execute("SELECT COUNT(*) FROM multi_plans")
         row = await cursor.fetchone()
         if row[0] == 0:
-            for label, price in config.DEFAULT_MULTI_PLANS:
+            for plan in config.DEFAULT_MULTI_PLANS:
+                if len(plan) == 5:
+                    label, price_gram, price_trx, price_usdt, price_stars = plan
+                    price = price_usdt or 0
+                else:
+                    label, price = plan
+                    price_gram = price_trx = price_usdt = price_stars = price
                 await db.execute(
-                    "INSERT INTO multi_plans (label, price, active) VALUES (?, ?, 1)", (label, price)
+                    """INSERT INTO multi_plans (label, price, price_gram, price_trx, price_usdt, price_stars, active)
+                       VALUES (?, ?, ?, ?, ?, ?, 1)""",
+                    (label, price, price_gram, price_trx, price_usdt, price_stars),
                 )
             await db.commit()
 

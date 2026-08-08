@@ -78,8 +78,9 @@ Then set these **Variables** in the project:
 |---|---|
 | `BOT_TOKEN` | Token from BotFather |
 | `ADMIN_IDS` | Numeric admin ID(s), comma separated |
-| `CARD_NUMBER` | Card number shown to buyers |
-| `CARD_HOLDER` | Card holder name |
+| `GRAM_WALLET` | GRAM (TON network) wallet for payments |
+| `TRX_WALLET` | TRX wallet (TRON network) |
+| `USDT_WALLET` | USDT wallet (TRC-20 network) |
 | `DB_PATH` | `/data/bot.db` (see volume step) |
 | `BRAND_NAME` | Brand shown in welcome message (default `CR`) |
 | `SUPPORT_USERNAME` | Support username without `@` (default `CYBRSupport`) |
@@ -106,19 +107,24 @@ The bot is now **crash-proof**: it auto-creates the database directory on startu
 
 ## 🛒 Purchase Flow
 
-`Buy Service` → pick tariff → order summary + card number with buttons:
-**📤 Send Receipt** · **💰 Pay with Wallet** (if balance is enough) · **🔙 Back**
+`Buy Service` → pick tariff → see the price in **4 payment methods** → choose one:
+- 🪙 **GRAM** (TON network) — pay to the GRAM wallet, send receipt
+- 🔴 **TRX** (TRON network) — pay to the TRON wallet, send receipt
+- 💵 **USDT (TRC-20)** — pay to the USDT wallet, send receipt
+- ⭐ **Telegram Stars** — instant in-app payment (no receipt needed)
 
-Admin gets the order with **✅ Approve / ❌ Reject** buttons. After approval, the admin sends the panel/config info and the bot **delivers it automatically** to the buyer.
+The summary shows **🎟️ Apply coupon** — the discount is auto-applied to the chosen currency amount.
+
+Admin gets the order with **✅ Approve / ❌ Reject** buttons. After approval, the admin sends the panel/config info and the bot **delivers it automatically** to the buyer. Referral commission is credited on every delivered purchase.
 
 ## 🛠️ Admin Panel (`/admin` or menu button)
 
-- **Tariffs** — edit price, enable/disable, add new plans
+- **Tariffs** — edit or the add flow walks through **4 price steps** (GRAM → TRX → USDT → Stars), enable/disable
 - **✉️ Welcome message** — fully customizable HTML
 - **📜 Rules** — editable text
 - **🤝 Referral settings** — cash commission percent per successful referral purchase
 - **🎟️ Discount codes** — create/enable/disable/delete coupons
-- **💳 Wallet recharge bonus** — tiered threshold + bonus percent
+- **💰 Wallet recharge bonus** — tiered threshold + bonus percent
 - **📢 Force join** — set/change/remove the channel users must join before using the bot (the bot must be admin of that channel)
 - **🧪 Test config stock** — add configs one by one (name / volume / days / link), delete individual or clear all; every user who claims a test service consumes exactly one config
 
