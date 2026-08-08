@@ -133,6 +133,15 @@ async def init_db():
             )
             """
         )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS test_configs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                created_at TEXT
+            )
+            """
+        )
         await db.commit()
 
         # مهاجرت: ستون payment_method به جدول orders (برای دیتابیس‌های قدیمی‌تر که این ستون رو ندارن)
@@ -627,3 +636,68 @@ async def get_wallet_bonus_threshold() -> int:
 async def get_wallet_bonus_percent() -> int:
     val = await get_setting("wallet_bonus_percent")
     return int(val) if val is not None else 5
+
+
+# ---------- Force channel (اد اجباری) ----------
+async def get_force_channel() -> str:
+    """یوزرنیم کانال اجباری؛ رشته خالی یعنی اد اجباری غیرفعاله."""
+    val = await get_setting("force_channel", "")
+    return val or ""
+
+
+async def set_force_channel(channel: str) -> None:
+    """تنظیم یا حذف (با رشته خالی) کانال اد اجباری."""
+    await set_setting("force_channel", (channel or "").strip().lstrip("@"))
+
+
+# ---------- Test service stock (مخزن سرویس تست) ----------
+async def add_test_config(content: str) -> int:
+    async with _open_db() as db:
+        cursor = await db.execute(
+            "INSERT INTO test_configs (content, created_at) VALUES (?, ?)",
+            (content, datetime.now().isoformat()),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def list_test_configs(limit: int = 10):
+    async with _open_db() as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM test_configs ORDER BY id ASC LIMIT ?", (limit,)
+        )
+        return await cursor.fetchall()
+
+
+async def count_test_configs() -> int:
+    async with _open_db() as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM test_configs")
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+
+async def pop_test_config():
+    """قدیمی‌ترین کانفیگ مخزن رو برمی‌داره و از مخزن حذف می‌کنه؛ اگه مخزن خالی باشه None."""
+    async with _open_db() as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM test_configs ORDER BY id ASC LIMIT 1")
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        await db.execute("DELETE FROM test_configs WHERE id = ?", (row["id"],))
+        await db.commit()
+        return row
+
+
+async def delete_test_config(config_id: int) -> None:
+    async with _open_db() as db:
+        await db.execute("DELETE FROM test_configs WHERE id = ?", (config_id,))
+        await db.commit()
+
+
+async def clear_test_configs() -> int:
+    async with _open_db() as db:
+        cursor = await db.execute("DELETE FROM test_configs")
+        await db.commit()
+        return cursor.rowcount

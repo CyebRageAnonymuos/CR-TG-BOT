@@ -52,6 +52,66 @@ dp.message.outer_middleware(ThrottlingMiddleware(rate_limit=0.7))
 dp.callback_query.outer_middleware(ThrottlingMiddleware(rate_limit=0.4))
 
 
+# ---------- Force join (اد اجباری) ----------
+async def check_force_join(user_id: int) -> tuple[bool, str]:
+    """بررسی عضویت کاربر در کانال اجباری. (is_ok, channel_username)
+    اگه کانالی تنظیم نشده باشه یا ربات نتواد چک کنه (مثلاً ادمین کانال نیست)
+    به‌عنوان عضو قبول می‌شه تا ربات قفل نشه.
+    """
+    channel = await db.get_force_channel()
+    if not channel:
+        return True, ""
+    try:
+        member = await bot.get_chat_member("@" + channel, user_id)
+        return member.status in ("creator", "administrator", "member", "restricted"), channel
+    except Exception as e:
+        logging.warning(f"Force-join check failed for @{channel}: {e}")
+        return True, ""
+
+
+async def send_force_join_prompt(message: Message) -> None:
+    channel = await db.get_force_channel()
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📢 ورود به کانال", url=f"https://t.me/{channel}")],
+            [InlineKeyboardButton(text="✅ عضویت را بررسی کن", callback_data="force:check")],
+        ]
+    )
+    await message.answer(
+        f"می‌خواستیم به شما خوش‌آمد بگوییم اما ابتدا باید در کانال ما عضو شوید! 🙏\n\n"
+        f"🔗 <b>https://t.me/{channel}</b>\n\n"
+        f"پس از عضویت، دکمه «✅ عضویت را بررسی کن» را بزنید.",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+
+
+class ForceJoinMiddleware(BaseMiddleware):
+    """هر پیامی غیر از /start و پیام‌های ادمین رو وقتی اد اجباری فعاله چک می‌کنه."""
+
+    async def __call__(self, handler, event, data):
+        user = data.get("event_from_user")
+        if user is not None and user.id not in config.ADMIN_IDS:
+            text = (event.text or "").strip() if isinstance(event, Message) else ""
+            if not text.startswith("/start"):
+                is_member, _ = await check_force_join(user.id)
+                if not is_member:
+                    await event.answer(
+                        "🔒 برای ادامه کار ابتدا باید در کانال زیر عضو شوید:",
+                        reply_markup=InlineKeyboardMarkup(
+                            inline_keyboard=[
+                                [InlineKeyboardButton(text="📢 ورود به کانال", url=f"https://t.me/{await db.get_force_channel()}")],
+                                [InlineKeyboardButton(text="✅ عضویتش را بررسی کن", callback_data="force:check")],
+                            ]
+                        ),
+                    )
+                    return
+        return await handler(event, data)
+
+
+dp.message.outer_middleware(ForceJoinMiddleware())
+
+
 # ---------- States ----------
 class BuyStates(StatesGroup):
     waiting_for_receipt = State()
@@ -77,6 +137,8 @@ class AdminStates(StatesGroup):
     adding_coupon_maxuses = State()
     editing_wallet_bonus_threshold = State()
     editing_wallet_bonus_percent = State()
+    editing_force_channel = State()
+    adding_test_config = State()
 
 
 # ---------- Keyboards ----------
@@ -85,6 +147,7 @@ def main_menu_kb(user_id: int | None = None) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🛍 خرید سرویس"), KeyboardButton(text="🖥 سرویس‌های من")],
         [KeyboardButton(text="💰 کیف پول"), KeyboardButton(text="💬 پشتیبانی")],
         [KeyboardButton(text="🤝 دعوت دوستان"), KeyboardButton(text="📜 قوانین")],
+        [KeyboardButton(text="🧪 سرویس تست")],
     ]
     if user_id is not None and user_id in config.ADMIN_IDS:
         keyboard.append([KeyboardButton(text="🛠 مدیریت ربات")])
@@ -99,7 +162,7 @@ def back_menu_kb() -> InlineKeyboardMarkup:
 
 def services_kb() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text="🌍 سرویس ها)", callback_data="svc:multi")],
+        [InlineKeyboardButton(text="🌍 سرویس مولتی لوکیشن (وبگردی)", callback_data="svc:multi")],
         [InlineKeyboardButton(text="🔙 بازگشت به منو", callback_data="back:menu")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -182,6 +245,12 @@ def admin_decision_kb(order_id: int) -> InlineKeyboardMarkup:
 async def cmd_start(message: Message, command: CommandObject, state: FSMContext):
     await state.clear()
 
+    # اد اجباری: اگه کاربر عضو کانال نباشه، فقط پیام عضویت دریافت می‌کنه
+    is_member, _ = await check_force_join(message.from_user.id)
+    if not is_member:
+        await send_force_join_prompt(message)
+        return
+
     # پردازش لینک دعوت (رفرال) در صورت وجود
     args = command.args
     if args and args.startswith("ref_"):
@@ -208,10 +277,38 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             f"✨ <b>{config.BRAND_NAME}</b> ✨\n\n"
             f"👋 به پلتفرم فروش سرویس {config.BRAND_NAME} خوش اومدید\n\n"
             f"🎁 <b>چی دریافت می‌کنید؟</b>\n"
-            f"🌍 سرویس های پر سرعت\n\n"
+            f"🌍 سرویس مولتی لوکیشن (وبگردی) با پلن نامحدود\n\n"
             f"🟢 سرویس فعال دارید؟ از دکمه «🖥 سرویس‌های من» وارد شوید"
         )
     await message.answer(text, parse_mode="HTML", reply_markup=main_menu_kb(message.from_user.id))
+
+
+@dp.callback_query(F.data == "force:check")
+async def force_join_check(callback: CallbackQuery):
+    """دکمه «عضویت را بررسی کن» — بعد از اطمینانِ عضویت، منوی اصلی رو نشون می‌ده."""
+    is_member, _ = await check_force_join(callback.from_user.id)
+    channel = await db.get_force_channel()
+    if not is_member:
+        await callback.answer(
+            f"شما هنوز عضو کانال @{channel} نشده‌اید! ابتدا عضو شوید و دوباره امتحان کنید.",
+            show_alert=True,
+        )
+        return
+
+    custom = await db.get_welcome_message()
+    text = custom or (
+        f"✨ <b>{config.BRAND_NAME}</b> ✨\n\n"
+        f"👋 به پلتفرم فروش سرویس {config.BRAND_NAME} خوش اومدید\n\n"
+        f"🎁 <b>چی دریافت می‌کنید؟</b>\n"
+        f"🌍 سرویس مولتی لوکیشن (وبگردی) با پلن نامحدود\n\n"
+        f"🟢 سرویس فعال دارید؟ از دکمه «🖥 سرویس‌های من» وارد شوید"
+    )
+    try:
+        await callback.message.delete()
+    except Exception as e:
+        logging.warning(f"Could not delete force-join prompt: {e}")
+    await callback.message.answer(text, parse_mode="HTML", reply_markup=main_menu_kb(callback.from_user.id))
+    await callback.answer()
 
 
 @dp.message(F.text == "🛍 خرید سرویس")
@@ -251,7 +348,7 @@ async def cancel_order_and_go_back(callback: CallbackQuery, state: FSMContext):
         await callback.answer("در حال حاضر تعرفه‌ای برای این سرویس ثبت نشده.", show_alert=True)
         return
     await callback.message.edit_text(
-        "🌍 <b>سرویس های پرسرعت (همراه اول)</b>\nتعرفه مورد نظر رو انتخاب کنید:",
+        "🌍 <b>سرویس مولتی لوکیشن (وبگردی)</b>\nتعرفه مورد نظر رو انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=multi_plans_kb(plans),
     )
@@ -265,7 +362,7 @@ async def choose_multi_service(callback: CallbackQuery, state: FSMContext):
         await callback.answer("در حال حاضر تعرفه‌ای برای این سرویس ثبت نشده.", show_alert=True)
         return
     await callback.message.edit_text(
-        "🌍 <b>سرویس های پرسرعت</b>\nتعرفه مورد نظر رو انتخاب کنید:",
+        "🌍 <b>سرویس مولتی لوکیشن (وبگردی)</b>\nتعرفه مورد نظر رو انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=multi_plans_kb(plans),
     )
@@ -280,7 +377,7 @@ async def choose_multi_plan(callback: CallbackQuery, state: FSMContext):
         await callback.answer("این تعرفه دیگر موجود نیست.", show_alert=True)
         return
 
-    plan_name = f"🌍 سرویس ها - {plan['label']}"
+    plan_name = f"🌍 سرویس مولتی لوکیشن - {plan['label']}"
 
     order_id = await db.create_order(
         user_id=callback.from_user.id,
@@ -893,6 +990,68 @@ async def invite_handler(message: Message, state: FSMContext):
     await message.answer(text, parse_mode="HTML", reply_markup=back_menu_kb())
 
 
+# ---------- User: سرویس تست ----------
+@dp.message(F.text == "🧪 سرویس تست")
+async def test_service_handler(message: Message, state: FSMContext):
+    await state.clear()
+    count = await db.count_test_configs()
+    if count == 0:
+        await message.answer(
+            "🧪 متأسفانه در حال حاضر سرویس تست تمام شده است.\nبه‌زودی دوباره امتحان کنید.",
+            reply_markup=back_menu_kb(),
+        )
+        return
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎁 دریافت سرویس تست", callback_data="gettest")],
+            [InlineKeyboardButton(text="🔙 بازگشت به منو", callback_data="back:menu")],
+        ]
+    )
+    await message.answer(
+        f"🧪 <b>سرویس تست رایگان</b>\n\n"
+        f"همین حالا یک کانفیگ تست رایگان دریافت کنید (فقط {count} عدد باقی مانده!).",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+
+
+@dp.callback_query(F.data == "gettest")
+async def get_test_config(callback: CallbackQuery):
+    config_row = await db.pop_test_config()
+    if not config_row:
+        await callback.message.edit_text(
+            "متأسفانه سرویس تست همین حالا تمام شد 😔\nبه‌زودی موجودی مخزن شارژ می‌شود.",
+            reply_markup=back_menu_kb(),
+        )
+        await callback.answer()
+        return
+
+    remaining = await db.count_test_configs()
+    text = config_row["content"]
+    await callback.message.edit_text(
+        "🎁 <b>سرویس تست شما</b> 👇\n\n"
+        f"<code>{text}</code>\n\n"
+        f"⚠️ سرویس تست برای مدت محدودی فعال است و شامل پشتیبانی نمی‌شود.\n"
+        f"📦 باقی‌مانده از مخزن: {remaining}",
+        parse_mode="HTML",
+        reply_markup=back_menu_kb(),
+    )
+    await callback.answer()
+
+    for admin_id in config.ADMIN_IDS:
+        try:
+            await bot.send_message(
+                admin_id,
+                f"🧪 یک کاربر سرویس تست گرفت:\n"
+                f"👤 {callback.from_user.full_name} (@{callback.from_user.username or '-'})\n"
+                f"🆔 آیدی: <code>{callback.from_user.id}</code>\n"
+                f"📦 مخزن باقی‌مانده: {remaining}",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logging.warning(f"Could not notify admin {admin_id} about test service: {e}")
+
+
 # ---------- Admin: management panel ----------
 def admin_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -903,6 +1062,8 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🎟 کدهای تخفیف", callback_data="admincoupons")],
             [InlineKeyboardButton(text="🤝 تنظیمات رفرال", callback_data="adminreferral")],
             [InlineKeyboardButton(text="💳 تخفیف شارژ کیف پول", callback_data="adminwalletbonus")],
+            [InlineKeyboardButton(text="📢 اد اجباری", callback_data="adminforce")],
+            [InlineKeyboardButton(text="🧪 مخزن سرویس تست", callback_data="adminservice")],
             [InlineKeyboardButton(text="🔙 بازگشت به منو", callback_data="back:menu")],
         ]
     )
@@ -1269,6 +1430,187 @@ async def save_wallet_bonus_percent(message: Message, state: FSMContext):
     await db.set_setting("wallet_bonus_percent", int(text))
     await state.clear()
     await message.answer("✅ درصد هدیه با موفقیت بروزرسانی شد.", reply_markup=wallet_bonus_kb())
+
+
+# ---------- Admin: اد اجباری (force join) ----------
+def force_join_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✏️ تغییر کانال", callback_data="forceedit")],
+            [InlineKeyboardButton(text="🗑 حذف اد اجباری", callback_data="forcedel")],
+            [InlineKeyboardButton(text="🔙 بازگشت", callback_data="admintariff:root")],
+        ]
+    )
+
+
+@dp.callback_query(F.data == "adminforce")
+async def admin_force_settings(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in config.ADMIN_IDS:
+        await callback.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return
+    await state.clear()
+    channel = await db.get_force_channel()
+    status_text = f"<b>@{channel}</b>" if channel else "<i>غیرفعال (کانالی تنظیم نشده)</i>"
+    await callback.message.edit_text(
+        f"📢 <b>اد اجباری</b>\n\n"
+        f"کانال فعلی: {status_text}\n\n"
+        f"هر کاربری که بخواهد با ربات کار کند، ابتدا باید عضو این کانال شود. "
+        f"برای تغییر کانال، یوزرنیم کانال جدید را بفرستید و برای حذف کامل، روی «حذف» بزنید.\n\n"
+        f"⚠️ ربات باید در آن کانال ادمین باشد تا بتواند عضویت کاربران را بررسی کند.",
+        parse_mode="HTML",
+        reply_markup=force_join_kb(),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "forceedit")
+async def start_edit_force_channel(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in config.ADMIN_IDS:
+        await callback.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return
+    await state.set_state(AdminStates.editing_force_channel)
+    await callback.message.edit_text(
+        "یوزرنیم کانال اجباری را بفرستید (با یا بدون @، مثال: @mychannel یا mychannel):",
+        reply_markup=back_to_admin_root_kb,
+    )
+    await callback.answer()
+
+
+@dp.message(AdminStates.editing_force_channel)
+async def save_force_channel(message: Message, state: FSMContext):
+    channel = (message.text or "").strip().lstrip("@").replace(" ", "")
+    if not channel:
+        await message.answer("لطفاً یه یوزرنیم معتبر بفرستید.")
+        return
+    await db.set_force_channel(channel)
+    await state.clear()
+    await message.answer(
+        f"✅ اد اجباری فعال شد! کانال: <b>@{channel}</b>",
+        parse_mode="HTML",
+        reply_markup=force_join_kb(),
+    )
+
+
+@dp.callback_query(F.data == "forcedel")
+async def force_delete_channel(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in config.ADMIN_IDS:
+        await callback.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return
+    await db.set_force_channel("")
+    await state.clear()
+    await callback.message.edit_text(
+        "✅ اد اجباری غیرفعال شد.",
+        reply_markup=force_join_kb(),
+    )
+    await callback.answer()
+
+
+# ---------- Admin: مخزن سرویس تست ----------
+async def test_admin_kb() -> InlineKeyboardMarkup:
+    rows = []
+    configs = await db.list_test_configs(limit=10)
+    for c in configs:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"🗑 حذف #{c['id']}",
+                    callback_data=f"testdel:{c['id']}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(text="➕ افزودن کانفیگ", callback_data="testadd"),
+            InlineKeyboardButton(text="🧹 پاک کردن همه", callback_data="testclear"),
+        ]
+    )
+    rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="admintariff:root")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@dp.callback_query(F.data == "adminservice")
+async def admin_test_service(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in config.ADMIN_IDS:
+        await callback.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return
+    await state.clear()
+    count = await db.count_test_configs()
+    await callback.message.edit_text(
+        f"🧪 <b>مخزن سرویس تست</b>\n\n"
+        f"موجودی فعلی: <b>{count} کانفیگ</b>\n\n"
+        f"کانفیگ‌ها را یک‌به‌یک به مخزن اضافه کنید؛ هر کاربری که «سرویس تست» بگیرد، "
+        f"یک کانفیگ از مخزن کم می‌شود و به همان کاربر داده می‌شود.",
+        parse_mode="HTML",
+        reply_markup=await test_admin_kb(),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "testadd")
+async def start_add_test_config(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in config.ADMIN_IDS:
+        await callback.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return
+    await state.set_state(AdminStates.adding_test_config)
+    await callback.message.edit_text(
+        "📥 متن و لینک کانفیگ را بفرستید. هر پیام، یک کانفیگ اضافه می‌کند.\n"
+        "برای پایان، دکمه «🔙 بازگشت» را بزنید.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="🔙 بازگشت", callback_data="adminservice")]]
+        ),
+    )
+    await callback.answer()
+
+
+@dp.message(AdminStates.adding_test_config)
+async def add_test_config(message: Message, state: FSMContext):
+    text = message.text or message.caption
+    if not text or not text.strip():
+        await message.answer("لطفاً یه کانفیگ معتبر بفرستید.")
+        return
+    await db.add_test_config(text.strip())
+    count = await db.count_test_configs()
+    await message.answer(
+        f"✅ کانفیگ ذخیره شد! موجودی مخزن: <b>{count}</b>\n\n"
+        f"کانفیگ بعدی را بفرستید یا برای پایان از دکمه زیر استفاده کنید.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="✅ پایان و بازگشت به مخزن", callback_data="adminservice")]]
+        ),
+    )
+
+
+@dp.callback_query(F.data.startswith("testdel:"))
+async def delete_test_config(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in config.ADMIN_IDS:
+        await callback.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return
+    config_id = int(callback.data.split(":")[1])
+    await db.delete_test_config(config_id)
+    await state.clear()
+    count = await db.count_test_configs()
+    await callback.message.edit_text(
+        f"✅ کانفیگ #{config_id} حذف شد.\n\n"
+        f"🧪 <b>مخزن سرویس تست</b>\n\n"
+        f"موجودی فعلی: <b>{count} کانفیگ</b>",
+        parse_mode="HTML",
+        reply_markup=await test_admin_kb(),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "testclear")
+async def clear_test_configs(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in config.ADMIN_IDS:
+        await callback.answer("شما دسترسی ادمین ندارید.", show_alert=True)
+        return
+    removed = await db.clear_test_configs()
+    await state.clear()
+    await callback.message.edit_text(
+        f"🧹 همه مخزن پاک شد! ({removed} کانفیگ حذف شد).",
+        reply_markup=await test_admin_kb(),
+    )
+    await callback.answer()
 
 
 @dp.callback_query(F.data == "admintariff:multi")
