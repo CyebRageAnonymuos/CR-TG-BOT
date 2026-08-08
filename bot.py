@@ -1,8 +1,10 @@
 import asyncio
 import logging
+from datetime import datetime, timedelta
 from time import monotonic
 
 from aiogram import Bot, Dispatcher, F, BaseMiddleware
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -55,8 +57,9 @@ dp.callback_query.outer_middleware(ThrottlingMiddleware(rate_limit=0.4))
 # ---------- Force join (اد اجباری) ----------
 async def check_force_join(user_id: int) -> tuple[bool, str]:
     """بررسی عضویت کاربر در کانال اجباری. (is_ok, channel_username)
-    اگه کانالی تنظیم نشده باشه یا ربات نتواد چک کنه (مثلاً ادمین کانال نیست)
-    به‌عنوان عضو قبول می‌شه تا ربات قفل نشه.
+
+    نکته مهم: وقتی کاربر عضو کانال نباشه، تلگرام خطای «chat member not found»
+    برمی‌گردونه — یعنی اون کاربر عضو نیست و باید عضو بشه.
     """
     channel = await db.get_force_channel()
     if not channel:
@@ -64,9 +67,12 @@ async def check_force_join(user_id: int) -> tuple[bool, str]:
     try:
         member = await bot.get_chat_member("@" + channel, user_id)
         return member.status in ("creator", "administrator", "member", "restricted"), channel
+    except TelegramBadRequest as e:
+        logging.warning(f"Force-join: user {user_id} NOT in @{channel}: {e}")
+        return False, channel
     except Exception as e:
         logging.warning(f"Force-join check failed for @{channel}: {e}")
-        return True, ""
+        return False, channel
 
 
 async def send_force_join_prompt(message: Message) -> None:
@@ -138,7 +144,10 @@ class AdminStates(StatesGroup):
     editing_wallet_bonus_threshold = State()
     editing_wallet_bonus_percent = State()
     editing_force_channel = State()
-    adding_test_config = State()
+    adding_test_config_name = State()
+    adding_test_config_volume = State()
+    adding_test_config_days = State()
+    adding_test_config_content = State()
 
 
 # ---------- Keyboards ----------
@@ -991,6 +1000,33 @@ async def invite_handler(message: Message, state: FSMContext):
 
 
 # ---------- User: سرویس تست ----------
+TEST_CLAIM_INTERVAL_DAYS = 5  # هر کاربر هر ۵ روز فقط یک‌بار می‌تونه سرویس تست بگیره
+
+
+async def test_claim_remaining(user_id: int) -> int:
+    """چند ثانیه تا آزاد شدن درخواست بعدی؛ 0 یعنی الان می‌تونه بگیره."""
+    last = await db.get_last_test_claim(user_id)
+    if not last:
+        return 0
+    try:
+        last_dt = datetime.fromisoformat(last)
+    except ValueError:
+        return 0
+    remaining = (last_dt + timedelta(days=TEST_CLAIM_INTERVAL_DAYS)) - datetime.now()
+    return max(0, int(remaining.total_seconds()))
+
+
+def cooldown_display(seconds: int) -> str:
+    days = seconds // 86400
+    hours = (seconds % 86400) // 3600
+    minutes = (seconds % 3600) // 60
+    if days > 0:
+        return f"{days} روز و {hours} ساعت"
+    if hours > 0:
+        return f"{hours} ساعت و {minutes} دقیقه"
+    return f"{minutes} دقیقه"
+
+
 @dp.message(F.text == "🧪 سرویس تست")
 async def test_service_handler(message: Message, state: FSMContext):
     await state.clear()
@@ -1001,6 +1037,18 @@ async def test_service_handler(message: Message, state: FSMContext):
             reply_markup=back_menu_kb(),
         )
         return
+
+    remaining = await test_claim_remaining(message.from_user.id)
+    if remaining > 0:
+        await message.answer(
+            f"⏳ شما همین چندی پیش سرویس تست گرفتید!\n\n"
+            f"هر کاربر هر <b>{TEST_CLAIM_INTERVAL_DAYS} روز</b> یک‌بار می‌تونه سرویس تست دریافت کند.\n"
+            f"🕐 زمان باقی‌مانده تا دريافت بعدی: <b>{cooldown_display(remaining)}</b>",
+            parse_mode="HTML",
+            reply_markup=back_menu_kb(),
+        )
+        return
+
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🎁 دریافت سرویس تست", callback_data="gettest")],
@@ -1009,7 +1057,8 @@ async def test_service_handler(message: Message, state: FSMContext):
     )
     await message.answer(
         f"🧪 <b>سرویس تست رایگان</b>\n\n"
-        f"همین حالا یک کانفیگ تست رایگان دریافت کنید (فقط {count} عدد باقی مانده!).",
+        f"همین حالا یک کانفیگ تست رایگان دریافت کنید (فقط {count} عدد باقی مانده!).\n"
+        f"⏳ هر {TEST_CLAIM_INTERVAL_DAYS} روز یک‌بار می‌توانید از این قابلیت استفاده کنید.",
         parse_mode="HTML",
         reply_markup=kb,
     )
@@ -1017,22 +1066,39 @@ async def test_service_handler(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data == "gettest")
 async def get_test_config(callback: CallbackQuery):
+    remaining = await test_claim_remaining(callback.from_user.id)
+    if remaining > 0:
+        await callback.answer(
+            f"شما هنوز در Cooldown هستید! {cooldown_display(remaining)} دیگر فرصت دارید. ⏳",
+            show_alert=True,
+        )
+        return
+    await callback.message.edit_text("⏳ در حال آماده‌سازی سرویس تست...")
+    await callback.answer()
+
     config_row = await db.pop_test_config()
     if not config_row:
         await callback.message.edit_text(
             "متأسفانه سرویس تست همین حالا تمام شد 😔\nبه‌زودی موجودی مخزن شارژ می‌شود.",
             reply_markup=back_menu_kb(),
         )
-        await callback.answer()
         return
 
+    await db.set_test_claim(callback.from_user.id)
     remaining = await db.count_test_configs()
+    name = config_row["name"] or "سرویس تست"
+    volume = config_row["volume"] or "نامشخص"
+    days = config_row["days"] or "نامشخص"
     text = config_row["content"]
     await callback.message.edit_text(
         "🎁 <b>سرویس تست شما</b> 👇\n\n"
+        f"📦 نام: {name}\n"
+        f"💾 حجم: {volume}\n"
+        f"📅 مدت: {days} روز\n\n"
         f"<code>{text}</code>\n\n"
         f"⚠️ سرویس تست برای مدت محدودی فعال است و شامل پشتیبانی نمی‌شود.\n"
-        f"📦 باقی‌مانده از مخزن: {remaining}",
+        f"📦 باقی‌مانده از مخزن: {remaining}\n"
+        f"⏳ بعدی: {TEST_CLAIM_INTERVAL_DAYS} روز دیگر",
         parse_mode="HTML",
         reply_markup=back_menu_kb(),
     )
@@ -1045,6 +1111,7 @@ async def get_test_config(callback: CallbackQuery):
                 f"🧪 یک کاربر سرویس تست گرفت:\n"
                 f"👤 {callback.from_user.full_name} (@{callback.from_user.username or '-'})\n"
                 f"🆔 آیدی: <code>{callback.from_user.id}</code>\n"
+                f"📦 کانفیگ: {name} (حجم {volume} / {days} روز)\n"
                 f"📦 مخزن باقی‌مانده: {remaining}",
                 parse_mode="HTML",
             )
@@ -1482,6 +1549,25 @@ async def save_force_channel(message: Message, state: FSMContext):
     if not channel:
         await message.answer("لطفاً یه یوزرنیم معتبر بفرستید.")
         return
+
+    # اعتبارسنجی: ربات باید به کانال دسترسی داشته باشه و ادمین باشه وگرنه اد اجباری کار نمیکنه
+    try:
+        await bot.get_chat_member("@" + channel, message.from_user.id)
+    except TelegramBadRequest as e:
+        await message.answer(
+            f"❌ کانال <b>@{channel}</b> پیدا نشد یا ربات به آن اضافه نشده است.\n"
+            f"ابتدا ربات را به کانال اضافه کنید و ادمینش کنید. ({e})",
+            parse_mode="HTML",
+        )
+        return
+    except Exception as e:
+        await message.answer(
+            f"❌ ربات به <b>@{channel}</b> دسترسی ندارد (ادمین کانال نیست).\n"
+            f"ربات را در کانال ادمین کنید و یوزرنیم را دوباره بفرستید. ({e})",
+            parse_mode="HTML",
+        )
+        return
+
     await db.set_force_channel(channel)
     await state.clear()
     await message.answer(
@@ -1510,10 +1596,13 @@ async def test_admin_kb() -> InlineKeyboardMarkup:
     rows = []
     configs = await db.list_test_configs(limit=10)
     for c in configs:
+        name = c["name"] or f"کانفیگ #{c['id']}"
+        volume = c["volume"] or "-"
+        days = c["days"] or "-"
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"🗑 حذف #{c['id']}",
+                    text=f"🗑 {name} | {volume} | {days} روز",
                     callback_data=f"testdel:{c['id']}",
                 )
             ]
@@ -1538,8 +1627,8 @@ async def admin_test_service(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         f"🧪 <b>مخزن سرویس تست</b>\n\n"
         f"موجودی فعلی: <b>{count} کانفیگ</b>\n\n"
-        f"کانفیگ‌ها را یک‌به‌یک به مخزن اضافه کنید؛ هر کاربری که «سرویس تست» بگیرد، "
-        f"یک کانفیگ از مخزن کم می‌شود و به همان کاربر داده می‌شود.",
+        f"کانفیگ‌ها را یک‌به‌یک (نام، حجم، روز و لینک) به مخزن اضافه کنید؛ "
+        f"هر کاربری که «سرویس تست» بگیرد، یک کانفیگ از مخزن کم می‌شود و به همان کاربر داده می‌شود.",
         parse_mode="HTML",
         reply_markup=await test_admin_kb(),
     )
@@ -1551,10 +1640,11 @@ async def start_add_test_config(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in config.ADMIN_IDS:
         await callback.answer("شما دسترسی ادمین ندارید.", show_alert=True)
         return
-    await state.set_state(AdminStates.adding_test_config)
+    await state.set_state(AdminStates.adding_test_config_name)
     await callback.message.edit_text(
-        "📥 متن و لینک کانفیگ را بفرستید. هر پیام، یک کانفیگ اضافه می‌کند.\n"
-        "برای پایان، دکمه «🔙 بازگشت» را بزنید.",
+        "📥 <b>افزودن کانفیگ تست</b> — مرحله ۱ از ۴\n\n"
+        "نام کانفیگ را بفرستید (مثال: <b>سرور آلمان</b>):",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="🔙 بازگشت", callback_data="adminservice")]]
         ),
@@ -1562,20 +1652,69 @@ async def start_add_test_config(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@dp.message(AdminStates.adding_test_config)
-async def add_test_config(message: Message, state: FSMContext):
-    text = message.text or message.caption
-    if not text or not text.strip():
+@dp.message(AdminStates.adding_test_config_name)
+async def add_test_config_step_name(message: Message, state: FSMContext):
+    name = (message.text or "").strip()
+    if not name:
+        await message.answer("لطفاً یه نام معتبر بفرستید.")
+        return
+    await state.update_data(test_name=name)
+    await state.set_state(AdminStates.adding_test_config_volume)
+    await message.answer(
+        "✅ نام ثبت شد. مرحله ۲ از ۴ — حجم کانفیگ را بفرستید (مثال: 20GB یا ۱۰۰ گیگ):"
+    )
+
+
+@dp.message(AdminStates.adding_test_config_volume)
+async def add_test_config_step_volume(message: Message, state: FSMContext):
+    volume = (message.text or "").strip()
+    if not volume:
+        await message.answer("لطفاً حجم را بفرستید (مثال: 20GB).")
+        return
+    await state.update_data(test_volume=volume)
+    await state.set_state(AdminStates.adding_test_config_days)
+    await message.answer("مرحله ۳ از ۴ — مدت زمان کانفیگ را به روز بفرستید (مثال: 30):")
+
+
+@dp.message(AdminStates.adding_test_config_days)
+async def add_test_config_step_days(message: Message, state: FSMContext):
+    days = (message.text or "").strip()
+    if not days or not days.isdigit():
+        await message.answer("لطفاً تنها یک عدد برای روزها بفرستید (مثال: 30):")
+        return
+    await state.update_data(test_days=days)
+    await state.set_state(AdminStates.adding_test_config_content)
+    await message.answer(
+        "مرحله ۴ از ۴ — متن یا لینک کانفیگ را بفرستید (مثل V2Ray یا vless://...):"
+    )
+
+
+@dp.message(AdminStates.adding_test_config_content)
+async def add_test_config_step_content(message: Message, state: FSMContext):
+    content = message.text or message.caption
+    if not content or not content.strip():
         await message.answer("لطفاً یه کانفیگ معتبر بفرستید.")
         return
-    await db.add_test_config(text.strip())
+
+    data = await state.get_data()
+    await db.add_test_config(
+        name=data.get("test_name", "").strip(),
+        volume=data.get("test_volume", "").strip(),
+        days=data.get("test_days", "").strip(),
+        content=content.strip(),
+    )
     count = await db.count_test_configs()
+
+    await state.set_state(AdminStates.adding_test_config_name)
+    await state.update_data(adding_new_config=True)
     await message.answer(
         f"✅ کانفیگ ذخیره شد! موجودی مخزن: <b>{count}</b>\n\n"
-        f"کانفیگ بعدی را بفرستید یا برای پایان از دکمه زیر استفاده کنید.",
+        f"برای افزودن کانفیگ بعدی، نام آن را بفرستید یا برای پایان از دکمه زیر استفاده کنید.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="✅ پایان و بازگشت به مخزن", callback_data="adminservice")]]
+            inline_keyboard=[
+                [InlineKeyboardButton(text="✅ پایان و بازگشت به مخزن", callback_data="adminservice")]
+            ]
         ),
     )
 

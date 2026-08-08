@@ -137,8 +137,19 @@ async def init_db():
             """
             CREATE TABLE IF NOT EXISTS test_configs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                volume TEXT,
+                days TEXT,
                 content TEXT NOT NULL,
                 created_at TEXT
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS test_claims (
+                user_id INTEGER PRIMARY KEY,
+                last_taken TEXT
             )
             """
         )
@@ -165,6 +176,14 @@ async def init_db():
         # برای سفارش‌های قدیمی که original_price نداشتن، برابر با price در نظر گرفته میشه
         await db.execute("UPDATE orders SET original_price = price WHERE original_price IS NULL")
         await db.commit()
+
+        # مهاجرت: ستون‌های name/volume/days به جدول test_configs (برای دیتابیس‌های قبلی)
+        for col in ("name", "volume", "days"):
+            try:
+                await db.execute(f"ALTER TABLE test_configs ADD COLUMN {col} TEXT")
+                await db.commit()
+            except Exception:
+                pass  # ستون از قبل وجود داره
 
         # اولین اجرا: اگه جدول‌های تعرفه خالی بودن، از مقادیر پیش‌فرض config.py پر می‌شن
         import config
@@ -651,11 +670,11 @@ async def set_force_channel(channel: str) -> None:
 
 
 # ---------- Test service stock (مخزن سرویس تست) ----------
-async def add_test_config(content: str) -> int:
+async def add_test_config(name: str, volume: str, days: str, content: str) -> int:
     async with _open_db() as db:
         cursor = await db.execute(
-            "INSERT INTO test_configs (content, created_at) VALUES (?, ?)",
-            (content, datetime.now().isoformat()),
+            "INSERT INTO test_configs (name, volume, days, content, created_at) VALUES (?, ?, ?, ?, ?)",
+            (name, volume, days, content, datetime.now().isoformat()),
         )
         await db.commit()
         return cursor.lastrowid
@@ -701,3 +720,22 @@ async def clear_test_configs() -> int:
         cursor = await db.execute("DELETE FROM test_configs")
         await db.commit()
         return cursor.rowcount
+
+
+# ---------- Test service claims (محدودیت هر ۵ روز یک‌بار) ----------
+async def get_last_test_claim(user_id: int):
+    """آخرین زمان دریافت سرویس تست توسط کاربر؛ اگه هیچ‌وقت نگرفته باشه None."""
+    async with _open_db() as db:
+        cursor = await db.execute("SELECT last_taken FROM test_claims WHERE user_id = ?", (user_id,))
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+
+async def set_test_claim(user_id: int) -> None:
+    async with _open_db() as db:
+        await db.execute(
+            """INSERT INTO test_claims (user_id, last_taken) VALUES (?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET last_taken = excluded.last_taken""",
+            (user_id, datetime.now().isoformat()),
+        )
+        await db.commit()
