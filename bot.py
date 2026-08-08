@@ -134,9 +134,15 @@ class WalletStates(StatesGroup):
 class AdminStates(StatesGroup):
     waiting_for_panel_info = State()
     waiting_for_reject_reason = State()
-    editing_multi_price = State()
+    editing_multi_gram = State()
+    editing_multi_trx = State()
+    editing_multi_usdt = State()
+    editing_multi_stars = State()
     adding_multi_label = State()
-    adding_multi_price = State()
+    adding_multi_gram = State()
+    adding_multi_trx = State()
+    adding_multi_usdt = State()
+    adding_multi_stars = State()
     editing_welcome_message = State()
     editing_referral_percent = State()
     editing_rules_text = State()
@@ -300,12 +306,14 @@ def waiting_receipt_kb(order_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def order_summary_text(order) -> str:
-    plan = order["plan_name"]
+async def order_summary_text(order) -> str:
+    """خلاصه سفارش: نام پلن، کد تخفیف و قیمت به هر ۴ روش پرداخت."""
+    plan = await db.get_multi_plan(order["plan_id"]) if order.get("plan_id") else None
+    prices = plan_prices(plan) if plan else {}
     lines = [
         "🧾 <b>خلاصه سفارش شما</b>",
         "—————————————",
-        f"📦 {plan}",
+        f"📦 {order['plan_name']}",
     ]
     if order["coupon_code"]:
         lines.append(f"🎟 کد تخفیف: {order['coupon_code']}")
@@ -313,9 +321,9 @@ def order_summary_text(order) -> str:
     lines.append("💰 <b>روش پرداخت را انتخاب کنید:</b>")
     for cur in ("gram", "trx", "usdt", "stars"):
         info = CURRENCIES[cur]
-        price = order.get(f"price_{cur}")
-        if price is None or (isinstance(price, str) and price == ""):
-            lines.append(f"{info['icon']} {info['name']} : —")
+        price = prices.get(cur)
+        if price in (None, ""):
+            lines.append(f"{info['icon']} {info['name']}: —")
         else:
             lines.append(f"{info['icon']} {info['name']}: <b>{fmt_amount(price)}</b>")
     lines.append("—————————————")
@@ -334,6 +342,24 @@ def admin_decision_kb(order_id: int) -> InlineKeyboardMarkup:
 
 
 # ---------- User handlers ----------
+def default_welcome_text() -> str:
+    return (
+        f"🚀 <b>{config.BRAND_NAME}</b> 🚀\n"
+        f"✨═══════════════════✨\n"
+        f"👋 <b>سلام! خوش اومدی به دنیای سرویس‌های {config.BRAND_NAME}</b>\n\n"
+        f"🎁 <b>چی اینجا گیرت میاد؟</b>\n"
+        f"🌍 <b>سرویس ها</b> — پلن‌های متنوع و پرفورمنس بالا\n"
+        f"💳 پرداخت با <b>GRAM</b> 🪙، <b>TRX</b> 🔴، <b>USDT</b> 💵 یا <b>استارز</b> ⭐\n"
+        f"🧪 سرویس <b>تست رایگان</b> — هر ۵ روز یک‌بار\n\n"
+        f"🔥 <b>چطور شروع کنیم؟</b>\n"
+        f"1️⃣ از منوی زیر «🌍 سرویس ها» رو بزن\n"
+        f"2️⃣ تعرفه‌ای که می‌خوای رو انتخاب کن\n"
+        f"3️⃣ روش پرداختت رو انتخاب و رسید رو بفرست 🧾\n\n"
+        f"⚡️ <b>سرعت بالا + پشتیبانی پاسخ‌گو = بهترین تجربه</b>\n"
+        f"🟢 سرویس فعال داری؟ از «🖥 سرویس‌های من» وضعیت و کانفیگت رو ببین."
+    )
+
+
 @dp.message(CommandStart())
 async def cmd_start(message: Message, command: CommandObject, state: FSMContext):
     await state.clear()
@@ -366,13 +392,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
     if custom_welcome:
         text = custom_welcome
     else:
-        text = (
-            f"✨ <b>{config.BRAND_NAME}</b> ✨\n\n"
-            f"👋 به پلتفرم فروش سرویس {config.BRAND_NAME} خوش اومدید\n\n"
-            f"🎁 <b>چی دریافت می‌کنید؟</b>\n"
-            f"🌍 سرویس ها با پلن نامحدود\n\n"
-            f"🟢 سرویس فعال دارید؟ از دکمه «🖥 سرویس‌های من» وارد شوید"
-        )
+        text = default_welcome_text()
     await message.answer(text, parse_mode="HTML", reply_markup=main_menu_kb(message.from_user.id))
 
 
@@ -389,13 +409,7 @@ async def force_join_check(callback: CallbackQuery):
         return
 
     custom = await db.get_welcome_message()
-    text = custom or (
-        f"✨ <b>{config.BRAND_NAME}</b> ✨\n\n"
-        f"👋 به پلتفرم فروش سرویس {config.BRAND_NAME} خوش اومدید\n\n"
-        f"🎁 <b>چی دریافت می‌کنید؟</b>\n"
-        f"🌍 سرویس ها با پلن نامحدود\n\n"
-        f"🟢 سرویس فعال دارید؟ از دکمه «🖥 سرویس‌های من» وارد شوید"
-    )
+    text = custom or default_welcome_text()
     try:
         await callback.message.delete()
     except Exception as e:
@@ -464,29 +478,173 @@ async def choose_multi_service(callback: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("mplan:"))
 async def choose_multi_plan(callback: CallbackQuery, state: FSMContext):
+    """نمایش جزئیات تعرفه (قیمت به ۴ روش پرداخت) و شروع خرید."""
     plan_id = int(callback.data.split(":")[1])
     plan = await db.get_multi_plan(plan_id)
     if not plan or not plan["active"]:
         await callback.answer("این تعرفه دیگر موجود نیست.", show_alert=True)
         return
 
-    plan_name = f"🌍 سرویس - {plan['label']}"
+    prices = plan_prices(plan)
+    lines = [
+        f"🌍 <b>{plan['label']}</b>",
+        "—————————————",
+        "💰 <b>قیمت‌ها (انتخاب روش پرداخت):</b>",
+    ]
+    for cur in ("gram", "trx", "usdt", "stars"):
+        info = CURRENCIES[cur]
+        price = prices.get(cur)
+        if price in (None, ""):
+            lines.append(f"{info['icon']} {info['name']}: —")
+        else:
+            lines.append(f"{info['icon']} {info['name']}: <b>{fmt_amount(price)}</b>")
+    lines.append("—————————————")
+    lines.append("برای ادامه و انتخاب روش پرداخت، دکمه زیر رو بزنید 👇")
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🛒 ادامه و پرداخت", callback_data=f"mplannext:{plan['id']}")],
+            [InlineKeyboardButton(text="🔙 بازگشت", callback_data="back:services")],
+        ]
+    )
+    await callback.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("mplannext:"))
+async def start_multi_purchase(callback: CallbackQuery, state: FSMContext):
+    """ساخت سفارش و رفتن به صفحه خلاصه و انتخاب روش پرداخت."""
+    plan_id = int(callback.data.split(":")[1])
+    plan = await db.get_multi_plan(plan_id)
+    if not plan or not plan["active"]:
+        await callback.answer("این تعرفه دیگر موجود نیست.", show_alert=True)
+        return
 
     order_id = await db.create_order(
         user_id=callback.from_user.id,
         username=callback.from_user.username or "",
         full_name=callback.from_user.full_name,
         plan_id=plan_id,
-        plan_name=plan_name,
-        price=plan["price"],
+        plan_name=plan["label"],
+        price=0,
+        payment_method="crypto",
     )
 
     await state.clear()
     order = await db.get_order(order_id)
     await callback.message.edit_text(
-        order_summary_text(order), parse_mode="HTML", reply_markup=await build_order_summary_kb(order)
+        await order_summary_text(order), parse_mode="HTML", reply_markup=build_order_summary_kb(order)
     )
     await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("pay:"))
+async def choose_payment_method(callback: CallbackQuery, state: FSMContext):
+    """انتخاب روش پرداخت: ثبت ارز/مبلغ روی سفارش و نمایش صفحه پرداخت (یا درگاه استارز)."""
+    _, order_id_str, cur = callback.data.split(":")
+    order_id = int(order_id_str)
+    order = await db.get_order(order_id)
+    if not order or order["user_id"] != callback.from_user.id:
+        await callback.answer("این سفارش پیدا نشد.", show_alert=True)
+        return
+    if order["status"] not in ("awaiting_receipt", "pending"):
+        await callback.answer("این سفارش دیگه قابل پرداخت نیست.", show_alert=True)
+        return
+
+    plan = await db.get_multi_plan(order["plan_id"])
+    if not plan:
+        await callback.answer("این تعرفه دیگر موجود نیست.", show_alert=True)
+        return
+    price = plan_prices(plan).get(cur)
+    if price in (None, ""):
+        await callback.answer("قیمتی برای این روش پرداخت ثبت نشده. روش دیگه‌ای انتخاب کنید.", show_alert=True)
+        return
+
+    price_f = float(price)
+    if order.get("coupon_code"):
+        coupon = await db.get_coupon(order["coupon_code"])
+        if coupon and coupon["active"]:
+            price_f = price_f * (100 - coupon["percent"]) / 100
+    price_f = round(price_f, 6)
+
+    await db.set_order_crypto(order_id, cur, str(price_f))
+    order = await db.get_order(order_id)
+
+    if cur == "stars":
+        stars_amount = max(1, int(price_f))
+        await callback.message.edit_text(
+            f"⭐ <b>پرداخت با استارز تلگرام</b>\n"
+            f"—————————————\n"
+            f"📦 {order['plan_name']}\n"
+            f"💰 مبلغ: <b>{stars_amount} ⭐</b>\n"
+            f"—————————————\n"
+            f"درگاه پرداخت تلگرام در حال باز شدن است…",
+            parse_mode="HTML",
+        )
+        try:
+            await bot.send_invoice(
+                chat_id=callback.from_user.id,
+                title=f"خرید {order['plan_name']}",
+                description=f"پرداخت سرویس {order['plan_name']} با استارز",
+                payload=f"order:{order['id']}",
+                provider_token="",
+                currency="XTR",
+                prices=[LabeledPrice(label=order["plan_name"], amount=stars_amount)],
+            )
+        except Exception as e:
+            logging.error(f"send_invoice failed: {e}")
+            await callback.message.edit_text(
+                "❌ درگاه پرداخت استارز فعلاً در دسترس نیست. روش دیگه‌ای انتخاب کنید.",
+                reply_markup=build_order_summary_kb(order),
+            )
+        await callback.answer()
+        return
+
+    await callback.message.edit_text(
+        payment_page_text(order), parse_mode="HTML", reply_markup=payment_page_kb(order["id"])
+    )
+    await callback.answer()
+
+
+@dp.pre_checkout_query()
+async def pre_checkout_handler(query: PreCheckoutQuery):
+    await query.answer(ok=True)
+
+
+@dp.message(F.successful_payment)
+async def on_successful_payment(message: Message):
+    """پرداخت موفق با استارز: ثبت سفارش و ارسال به ادمین برای تحویل."""
+    payload = message.successful_payment.invoice_payload or ""
+    order_id = int(payload.split(":")[1]) if payload.startswith("order:") else 0
+    order = await db.get_order(order_id) if order_id else None
+    if not order:
+        await message.answer("❌ سفارش پیدا نشد. با پشتیبانی در تماس باشید.", reply_markup=back_menu_kb())
+        return
+
+    await db.set_order_paid_by_stars(order_id, message.successful_payment.total_amount)
+    await db.attach_receipt(order_id, f"stars:{message.successful_payment.telegram_payment_charge_id}")
+    order = await db.get_order(order_id)
+
+    await message.answer(
+        f"✅ <b>پرداخت با استارز موفق بود!</b>\n"
+        f"مبلغ: {message.successful_payment.total_amount} ⭐\n"
+        f"سفارش شما برای بررسی و تحویل به ادمین ارسال شد. به محض تأیید، اطلاعات سرویس ارسال میشه.",
+        parse_mode="HTML",
+        reply_markup=main_menu_kb(message.from_user.id),
+    )
+
+    caption = (
+        f"🆕 سفارش جدید #{order_id} (⭐ پرداخت با استارز)\n"
+        f"👤 کاربر: {order['full_name']} (@{order['username'] or '-'})\n"
+        f"🆔 آیدی عددی: {order['user_id']}\n"
+        f"📦 پلن: {order['plan_name']}\n"
+        f"💰 مبلغ: {order['amount']} ⭐"
+    )
+    for admin_id in config.ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, caption, reply_markup=admin_decision_kb(order_id))
+        except Exception as e:
+            logging.warning(f"Could not notify admin {admin_id}: {e}")
 
 
 @dp.callback_query(F.data.startswith("reqreceipt:"))
@@ -520,7 +678,7 @@ async def back_to_order_summary(callback: CallbackQuery, state: FSMContext):
 
     await state.clear()
     await callback.message.edit_text(
-        order_summary_text(order), parse_mode="HTML", reply_markup=await build_order_summary_kb(order)
+        await order_summary_text(order), parse_mode="HTML", reply_markup=build_order_summary_kb(order)
     )
     await callback.answer()
 
@@ -574,10 +732,11 @@ async def apply_coupon_code(message: Message, state: FSMContext):
 
     order = await db.get_order(order_id)
     await message.answer(
-        f"✅ کد تخفیف {code} ({coupon['percent']}٪) با موفقیت اعمال شد!",
+        f"✅ کد تخفیف {code} ({coupon['percent']}٪) با موفقیت اعمال شد!\n"
+        "🎯 حالا روش پرداخت دلخواه رو انتخاب کنید و مبلغ به‌صورت خودکار با تخفیف محاسبه میشه.",
     )
     await message.answer(
-        order_summary_text(order), parse_mode="HTML", reply_markup=await build_order_summary_kb(order)
+        await order_summary_text(order), parse_mode="HTML", reply_markup=build_order_summary_kb(order)
     )
 
 
@@ -593,48 +752,18 @@ async def remove_coupon(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     order = await db.get_order(order_id)
     await callback.message.edit_text(
-        order_summary_text(order), parse_mode="HTML", reply_markup=await build_order_summary_kb(order)
+        await order_summary_text(order), parse_mode="HTML", reply_markup=build_order_summary_kb(order)
     )
     await callback.answer("کد تخفیف حذف شد.")
 
 
 @dp.callback_query(F.data.startswith("walletpay:"))
 async def pay_with_wallet(callback: CallbackQuery, state: FSMContext):
-    order_id = int(callback.data.split(":")[1])
-    order = await db.get_order(order_id)
-    if not order or order["user_id"] != callback.from_user.id:
-        await callback.answer("این سفارش پیدا نشد.", show_alert=True)
-        return
-    if order["status"] not in ("awaiting_receipt", "pending"):
-        await callback.answer("این سفارش دیگه قابل پرداخت نیست.", show_alert=True)
-        return
-
-    ok = await db.deduct_wallet_balance(order["user_id"], order["price"])
-    if not ok:
-        await callback.answer("موجودی کیف پول شما کافی نیست.", show_alert=True)
-        return
-
-    await db.mark_order_paid_by_wallet(order_id)
-    await state.clear()
-
-    await callback.message.edit_text(
-        "✅ پرداخت با موفقیت از کیف پول انجام شد.\nسفارش شما برای بررسی و تحویل به ادمین ارسال شد.",
-        reply_markup=back_menu_kb(),
+    """پرداخت از کیف پول (فقط USDT به تومان محاسبه نمی‌شود؛ کیف پول مختص کمیسیون/شارژ است)."""
+    await callback.answer(
+        "💰 پرداخت مستقیم با کیف پول فقط از طریق روش USDT در دسترس است. از دکمه «پرداخت با USDT» استفاده کنید.",
+        show_alert=True,
     )
-    await callback.answer()
-
-    caption = (
-        f"🆕 سفارش جدید #{order_id} (💰 پرداخت با کیف پول)\n"
-        f"👤 کاربر: {order['full_name']} (@{order['username'] or '-'})\n"
-        f"🆔 آیدی عددی: {order['user_id']}\n"
-        f"📦 پلن: {order['plan_name']}\n"
-        f"💰 مبلغ: {order['price']:,} تومان"
-    )
-    for admin_id in config.ADMIN_IDS:
-        try:
-            await bot.send_message(admin_id, caption, reply_markup=admin_decision_kb(order_id))
-        except Exception as e:
-            logging.warning(f"Could not notify admin {admin_id}: {e}")
 
 
 @dp.message(BuyStates.waiting_for_receipt, F.photo | F.document)
@@ -662,7 +791,8 @@ async def receive_receipt(message: Message, state: FSMContext):
         f"👤 کاربر: {order['full_name']} (@{order['username'] or '-'})\n"
         f"🆔 آیدی عددی: {order['user_id']}\n"
         f"📦 پلن: {order['plan_name']}\n"
-        f"💰 مبلغ: {order['price']:,} تومان"
+        f"💰 مبلغ: {CURRENCIES.get(order['currency'] or '', {}).get('icon', '💰')} "
+        f"{fmt_amount(order['amount'])} {order['currency'].upper() if order['currency'] else ''}".rstrip()
     )
 
     for admin_id in config.ADMIN_IDS:
@@ -717,11 +847,16 @@ def my_orders_kb(orders) -> InlineKeyboardMarkup:
 
 
 def order_detail_text(order) -> str:
+    cur = order.get("currency") or ""
+    if order.get("amount") not in (None, ""):
+        amount_text = f"{CURRENCIES.get(cur, {}).get('icon', '💰')} مبلغ: {fmt_amount(order['amount'])} {cur.upper()}" if cur else "—"
+    else:
+        amount_text = f"💰 مبلغ: {order['price']:,} تومان"
     text = (
         f"🆔 <b>سفارش #{order['id']}</b>\n"
         f"—————————————\n"
         f"📦 پلن: {order['plan_name']}\n"
-        f"💰 مبلغ: {order['price']:,} تومان\n"
+        f"{amount_text}\n"
         f"📌 وضعیت: {ORDER_STATUS_MAP.get(order['status'], order['status'])}"
     )
     if order["status"] == "delivered" and order["panel_info"]:
@@ -775,15 +910,34 @@ async def back_to_my_orders_list(callback: CallbackQuery):
 
 
 def topup_summary_text(topup) -> str:
-    return (
-        f"🧾 <b>شارژ کیف پول</b>\n"
-        f"—————————————\n"
-        f"💰 مبلغ: {topup['amount']:,} تومان\n"
-        f"—————————————\n\n"
-        f"💳 شماره کارت: <code>{config.CARD_NUMBER}</code>\n"
-        f"👤 به نام: {config.CARD_HOLDER}\n\n"
-        f"ℹ️ پس از واریز وجه، روی دکمه «📤 ارسال رسید» بزنید و سپس عکس یا فایل رسید رو ارسال کنید."
-    )
+    cur = topup.get("currency") or "usdt"
+    info = CURRENCIES.get(cur, CURRENCIES["usdt"])
+    lines = [
+        "🧾 <b>شارژ کیف پول</b>",
+        "—————————————",
+        f"{info['icon']} روش پرداخت: {info['name']}",
+        f"💰 مبلغ: <b>{fmt_amount(topup['amount'])}</b> {cur.upper()}",
+        "—————————————",
+    ]
+    if info["wallet"]:
+        lines += [
+            f"🏦 آدرس کیف پول ({info['note']}):",
+            f"<code>{info['wallet']}</code>",
+            "",
+            "ℹ️ مبلغ دقیق بالا را به همین آدرس واریز کنید و سپس رسید را ارسال کنید.",
+        ]
+    else:
+        lines.append("⭐ این روش فقط برای خرید سرویس در دسترس است.")
+    return "\n".join(lines)
+
+
+def topup_currency_kb() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=f"{CURRENCIES[cur]['icon']} {CURRENCIES[cur]['name']}", callback_data=f"topupcc:{cur}")]
+        for cur in ("gram", "trx", "usdt")
+    ]
+    rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="back:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def topup_summary_kb(topup_id: int) -> InlineKeyboardMarkup:
@@ -821,7 +975,8 @@ async def wallet_handler(message: Message, state: FSMContext):
     text = (
         f"💰 <b>کیف پول شما</b>\n\n"
         f"موجودی فعلی: <b>{balance:,} تومان</b>\n\n"
-        f"می‌تونید کیف پولتون رو شارژ کنید و در خریدهای بعدی بدون نیاز به ارسال رسید، از همون پرداخت کنید.\n\n"
+        f"کیف پول شما برای کمیسیون ارجاع دوستان استفاده می‌شه. "
+        f"برای خرید سرویس، مستقیم از طریق رمزارز (GRAM/TRX/USDT) یا استارز پرداخت کنید.\n\n"
         f"🎁 شارژهای <b>{threshold:,} تومان</b> به بالا، <b>{bonus_percent}٪ هدیه اضافه</b> می‌گیرن!"
     )
     kb = InlineKeyboardMarkup(
@@ -835,12 +990,31 @@ async def wallet_handler(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data == "topupwallet")
 async def start_topup(callback: CallbackQuery, state: FSMContext):
-    threshold = await db.get_wallet_bonus_threshold()
-    bonus_percent = await db.get_wallet_bonus_percent()
-    await state.set_state(WalletStates.entering_topup_amount)
+    await state.clear()
     await callback.message.edit_text(
-        f"💳 مبلغ مورد نظر برای شارژ کیف پول رو به تومان وارد کنید (فقط عدد، مثال: 200000):\n\n"
-        f"🎁 نکته: شارژ {threshold:,} تومان به بالا، {bonus_percent}٪ هدیه اضافه می‌گیره!",
+        "🧾 <b>شارژ کیف پول</b>\n"
+        "—————————————\n"
+        "💰 ابتدا روش پرداخت (ارز) رو انتخاب کنید:",
+        parse_mode="HTML",
+        reply_markup=topup_currency_kb(),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("topupcc:"))
+async def topup_choose_currency(callback: CallbackQuery, state: FSMContext):
+    cur = callback.data.split(":")[1]
+    if cur not in CURRENCIES or not CURRENCIES[cur]["wallet"]:
+        await callback.answer("این روش در دسترس نیست.", show_alert=True)
+        return
+    await state.update_data(topup_cur=cur)
+    await state.set_state(WalletStates.entering_topup_amount)
+    info = CURRENCIES[cur]
+    await callback.message.edit_text(
+        f"💵 <b>شارژ با {info['name']}</b>\n"
+        f"—————————————\n"
+        f"مبلغ مورد نظر به {cur.upper()} رو وارد کنید (فقط عدد، مثال: 5):",
+        parse_mode="HTML",
         reply_markup=back_menu_kb(),
     )
     await callback.answer()
@@ -848,14 +1022,23 @@ async def start_topup(callback: CallbackQuery, state: FSMContext):
 
 @dp.message(WalletStates.entering_topup_amount)
 async def receive_topup_amount(message: Message, state: FSMContext):
-    text = (message.text or "").replace(",", "").strip()
-    if not text.isdigit() or int(text) <= 0:
-        await message.answer("لطفاً فقط عدد بزرگ‌تر از صفر بفرستید (مثال: 200000)")
+    data = await state.get_data()
+    cur = data.get("topup_cur") or "usdt"
+    text = (message.text or "").replace(",", "").replace("٬", "").strip()
+    try:
+        amount = float(text)
+    except ValueError:
+        amount = 0.0
+    if amount <= 0:
+        await message.answer("لطفاً فقط عدد بزرگ‌تر از صفر بفرستید (مثال: 5)")
         return
 
-    amount = int(text)
     topup_id = await db.create_wallet_topup(
-        message.from_user.id, message.from_user.username or "", message.from_user.full_name, amount
+        message.from_user.id,
+        message.from_user.username or "",
+        message.from_user.full_name,
+        amount,
+        currency=cur,
     )
     await state.clear()
     topup = await db.get_wallet_topup(topup_id)
@@ -932,7 +1115,8 @@ async def receive_topup_receipt(message: Message, state: FSMContext):
         f"💰 درخواست شارژ کیف پول #{topup_id}\n"
         f"👤 کاربر: {topup['full_name']} (@{topup['username'] or '-'})\n"
         f"🆔 آیدی عددی: {topup['user_id']}\n"
-        f"💵 مبلغ: {topup['amount']:,} تومان"
+        f"💵 مبلغ: {fmt_amount(topup['amount'])} "
+        f"{(topup.get('currency') or 'usdt').upper()}"
     )
     for admin_id in config.ADMIN_IDS:
         try:
@@ -1225,10 +1409,11 @@ async def multi_admin_list_kb() -> InlineKeyboardMarkup:
     rows = []
     for p in plans:
         status = "✅" if p["active"] else "🚫"
+        gram = fmt_amount(p["price_gram"])
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{status} {p['label']} - {p['price']:,} تومان",
+                    text=f"{status} {p['label']} - 🪙 {gram} GRAM",
                     callback_data=f"mpriceedit:{p['id']}",
                 ),
                 InlineKeyboardButton(
@@ -1860,6 +2045,38 @@ async def toggle_multi(callback: CallbackQuery, state: FSMContext):
     await callback.answer("وضعیت تعرفه تغییر کرد.")
 
 
+PRICE_STEP_PROMPTS = {
+    "gram": (
+        "🪙 قیمت این تعرفه به <b>GRAM (شبکه TON)</b> رو بفرستید (فقط عدد، مثال: 3):",
+        "admin:gram",
+    ),
+    "trx": (
+        "🔴 قیمت این تعرفه به <b>TRX (شبکه TRON)</b> رو بفرستید (فقط عدد، مثال: 25):",
+        "admin:trx",
+    ),
+    "usdt": (
+        "💵 قیمت این تعرفه به <b>USDT (TRC-20)</b> رو بفرستید (فقط عدد، مثال: 2.5):",
+        "admin:usdt",
+    ),
+    "stars": (
+        "⭐ قیمت این تعرفه به <b>استارز تلگرام</b> رو بفرستید (فقط عدد، مثال: 15):",
+        "admin:stars",
+    ),
+}
+PRICE_STEP_ORDER = ["gram", "trx", "usdt", "stars"]
+
+
+def parse_price_input(text: str):
+    text = (text or "").replace(",", "").replace("٬", "").strip()
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
 @dp.callback_query(F.data.startswith("mpriceedit:"))
 async def start_edit_multi_price(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in config.ADMIN_IDS:
@@ -1871,24 +2088,63 @@ async def start_edit_multi_price(callback: CallbackQuery, state: FSMContext):
         await callback.answer("این تعرفه پیدا نشد.", show_alert=True)
         return
     await state.update_data(plan_id=plan_id)
-    await state.set_state(AdminStates.editing_multi_price)
+    await state.set_state(AdminStates.editing_multi_gram)
     await callback.message.answer(
-        f"قیمت جدید برای «{plan['label']}» رو به تومان بفرستید (فقط عدد):"
+        f"⚙️ <b>ویرایش تعرفه «{plan['label']}»</b>\n"
+        f"قیمت‌های فعلی:\n"
+        f"🪙 GRAM: {fmt_amount(plan['price_gram'])}\n"
+        f"🔴 TRX: {fmt_amount(plan['price_trx'])}\n"
+        f"💵 USDT: {fmt_amount(plan['price_usdt'])}\n"
+        f"⭐ استارز: {fmt_amount(plan['price_stars'])}\n\n"
+        f"1/4) " + PRICE_STEP_PROMPTS["gram"][0],
+        parse_mode="HTML",
     )
     await callback.answer()
 
 
-@dp.message(AdminStates.editing_multi_price)
-async def save_multi_price(message: Message, state: FSMContext):
-    text = (message.text or "").replace(",", "").strip()
-    if not text.isdigit():
-        await message.answer("لطفاً فقط عدد بفرستید (مثال: 180000)")
+@dp.message(AdminStates.editing_multi_gram | AdminStates.editing_multi_trx | AdminStates.editing_multi_usdt | AdminStates.editing_multi_stars)
+async def save_multi_price_step(message: Message, state: FSMContext):
+    """مراحل ۴گانه ثبت قیمت (GRAM → TRX → USDT → استارز) هنگام ویرایش تعرفه."""
+    value = parse_price_input(message.text)
+    if value is None:
+        await message.answer("لطفاً فقط عدد معتبر بزرگ‌تر از صفر بفرستید (مثلاً 2.5 یا 15).")
         return
+
     data = await state.get_data()
     plan_id = data.get("plan_id")
-    await db.update_multi_price(plan_id, int(text))
+    current_state = await state.get_state()
+    cur = current_state.split("_")[-1]
+    await state.update_data(**{f"price_{cur}": value})
+
+    step_index = PRICE_STEP_ORDER.index(cur)
+    if step_index < len(PRICE_STEP_ORDER) - 1:
+        next_cur = PRICE_STEP_ORDER[step_index + 1]
+        next_state = getattr(AdminStates, f"editing_multi_{next_cur}")
+        await state.set_state(next_state)
+        num = step_index + 2
+        await message.answer(
+            f"{num}/4) " + PRICE_STEP_PROMPTS[next_cur][0],
+            parse_mode="HTML",
+        )
+        return
+
+    plan = await db.get_multi_plan(plan_id)
+    if not plan:
+        await message.answer("❌ تعرفه پیدا نشد.", reply_markup=await multi_admin_list_kb())
+        await state.clear()
+        return
+    await db.update_multi_crypto_prices(
+        plan_id,
+        data.get("price_gram"),
+        data.get("price_trx"),
+        data.get("price_usdt"),
+        data.get("price_stars"),
+    )
     await state.clear()
-    await message.answer("✅ قیمت با موفقیت بروزرسانی شد.", reply_markup=await multi_admin_list_kb())
+    await message.answer(
+        f"✅ قیمت‌های «{plan['label']}» با موفقیت بروزرسانی شد.",
+        reply_markup=await multi_admin_list_kb(),
+    )
 
 
 @dp.callback_query(F.data == "madd")
@@ -1897,7 +2153,7 @@ async def start_add_multi(callback: CallbackQuery, state: FSMContext):
         await callback.answer("شما دسترسی ادمین ندارید.", show_alert=True)
         return
     await state.set_state(AdminStates.adding_multi_label)
-    await callback.message.answer("عنوان تعرفه جدید رو بفرستید (مثال: سه کاربره نامحدود یک‌ماهه):")
+    await callback.message.answer("1/5) عنوان تعرفه جدید رو بفرستید (مثال: سه کاربره نامحدود یک‌ماهه):")
     await callback.answer()
 
 
@@ -1908,19 +2164,38 @@ async def add_multi_label(message: Message, state: FSMContext):
         await message.answer("لطفاً یه عنوان معتبر بفرستید.")
         return
     await state.update_data(label=label)
-    await state.set_state(AdminStates.adding_multi_price)
-    await message.answer("حالا قیمت این تعرفه رو به تومان بفرستید:")
+    await state.set_state(AdminStates.adding_multi_gram)
+    await message.answer("2/5) " + PRICE_STEP_PROMPTS["gram"][0], parse_mode="HTML")
 
 
-@dp.message(AdminStates.adding_multi_price)
-async def add_multi_price(message: Message, state: FSMContext):
-    text = (message.text or "").replace(",", "").strip()
-    if not text.isdigit():
-        await message.answer("لطفاً فقط عدد بفرستید (مثال: 300000)")
+@dp.message(AdminStates.adding_multi_gram | AdminStates.adding_multi_trx | AdminStates.adding_multi_usdt | AdminStates.adding_multi_stars)
+async def add_multi_price_step(message: Message, state: FSMContext):
+    """مراحل ۳ تا ۵: قیمت GRAM → TRX → USDT → استارز هنگام افزودن تعرفه."""
+    value = parse_price_input(message.text)
+    if value is None:
+        await message.answer("لطفاً فقط عدد معتبر بزرگ‌تر از صفر بفرستید (مثلاً 3.5).")
         return
+
     data = await state.get_data()
+    current_state = await state.get_state()
+    cur = current_state.split("_")[-1]
+    await state.update_data(**{f"price_{cur}": value})
+
+    step_index = PRICE_STEP_ORDER.index(cur)
+    if step_index < len(PRICE_STEP_ORDER) - 1:
+        next_cur = PRICE_STEP_ORDER[step_index + 1]
+        await state.set_state(getattr(AdminStates, f"adding_multi_{next_cur}"))
+        await message.answer(f"{3 + step_index}/5) " + PRICE_STEP_PROMPTS[next_cur][0], parse_mode="HTML")
+        return
+
     label = data.get("label")
-    await db.add_multi_plan(label, int(text))
+    await db.add_multi_plan(
+        label,
+        data.get("price_gram"),
+        data.get("price_trx"),
+        data.get("price_usdt"),
+        data.get("price_stars"),
+    )
     await state.clear()
     await message.answer("✅ تعرفه جدید اضافه شد.", reply_markup=await multi_admin_list_kb())
 

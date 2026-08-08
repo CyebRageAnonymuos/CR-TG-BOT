@@ -262,6 +262,22 @@ async def remove_coupon_from_order(order_id: int) -> None:
         await db.commit()
 
 
+async def update_order_status(order_id: int, status: str) -> None:
+    async with _open_db() as db:
+        await db.execute("UPDATE orders SET status = ? WHERE id = ?", (status, order_id))
+        await db.commit()
+
+
+async def set_order_paid_by_stars(order_id: int, stars_amount: int) -> None:
+    """ثبت پرداخت موفق استارز روی سفارش و انتقال به وضعیت بررسی ادمین."""
+    async with _open_db() as db:
+        await db.execute(
+            "UPDATE orders SET status = 'pending', payment_method = ?, currency = ?, amount = ? WHERE id = ?",
+            ("stars", "stars", str(stars_amount), order_id),
+        )
+        await db.commit()
+
+
 async def mark_order_paid_by_wallet(order_id: int):
     async with _open_db() as db:
         await db.execute(
