@@ -9,9 +9,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 # آیدی عددی ادمین‌ها (با کاما جدا کنید اگر چند نفر هستند) مثال: 123456789,987654321
 ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 
-# اطلاعات کارت برای پرداخت
-CARD_NUMBER = os.getenv("CARD_NUMBER", "0000-0000-0000-0000")
-CARD_HOLDER = os.getenv("CARD_HOLDER", "نام صاحب حساب")
+# کیف پول‌های ارز دیجیتال برای پرداخت (هیچ شماره کارتی دیگه استفاده نمیشه)
+GRAM_WALLET = os.getenv("GRAM_WALLET", "UQAu5M2VScsaoQC6RMqjai4iWqEvoAalfojAbWJwUcffFqvm")  # TON
+TRX_WALLET = os.getenv("TRX_WALLET", "TPFE3BacNSRygh3qfF9E2qzLGDH2GC1x49")       # TRON (TRX)
+USDT_WALLET = os.getenv("USDT_WALLET", "TPFE3BacNSRy3qfF9E2qzLGDH2GC1x49")       # USDT (شبکه TRC-20)
 
 # مسیر دیتابیس - روی Railway پیشنهاد میشه از Volume استفاده کنید تا دیتا پاک نشه
 DB_PATH = os.getenv("DB_PATH", "bot.db")

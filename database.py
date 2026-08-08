@@ -185,6 +185,34 @@ async def init_db():
             except Exception:
                 pass  # ستون از قبل وجود داره
 
+        # مهاجرت: قیمت‌های ارز دیجیتال به جدول multi_plans
+        for col in ("price_gram", "price_trx", "price_usdt"):
+            try:
+                await db.execute(f"ALTER TABLE multi_plans ADD COLUMN {col} REAL")
+                await db.commit()
+            except Exception:
+                pass
+        try:
+            await db.execute("ALTER TABLE multi_plans ADD COLUMN price_stars INTEGER")
+            await db.commit()
+        except Exception:
+            pass
+
+        # مهاجرت: ارز پرداخت به جدول orders
+        for col in ("currency", "amount"):
+            try:
+                await db.execute(f"ALTER TABLE orders ADD COLUMN {col} TEXT")
+                await db.commit()
+            except Exception:
+                pass
+
+        # مهاجرت: ارز به جدول wallet_topups
+        try:
+            await db.execute("ALTER TABLE wallet_topups ADD COLUMN currency TEXT")
+            await db.commit()
+        except Exception:
+            pass
+
         # اولین اجرا: اگه جدول‌های تعرفه خالی بودن، از مقادیر پیش‌فرض config.py پر می‌شن
         import config
 
@@ -207,6 +235,15 @@ async def create_order(user_id, username, full_name, plan_id, plan_name, price, 
         )
         await db.commit()
         return cursor.lastrowid
+
+
+async def set_order_crypto(order_id: int, currency: str, amount: str) -> None:
+    """ثبت روش و مبلغ پرداختی انتخاب‌شده (مثلاً gram/trx/usdt/stars) روی سفارش."""
+    async with _open_db() as db:
+        await db.execute(
+            "UPDATE orders SET currency = ?, amount = ? WHERE id = ?", (currency, amount, order_id)
+        )
+        await db.commit()
 
 
 async def apply_coupon_to_order(order_id: int, code: str, new_price: int) -> None:
@@ -357,15 +394,28 @@ async def update_multi_price(plan_id: int, new_price: int):
         await db.commit()
 
 
+async def update_multi_crypto_prices(plan_id: int, price_gram, price_trx, price_usdt, price_stars):
+    async with _open_db() as db:
+        await db.execute(
+            "UPDATE multi_plans SET price_gram = ?, price_trx = ?, price_usdt = ?, price_stars = ? WHERE id = ?",
+            (price_gram, price_trx, price_usdt, price_stars, plan_id),
+        )
+        await db.commit()
+
+
 async def toggle_multi_active(plan_id: int):
     async with _open_db() as db:
         await db.execute("UPDATE multi_plans SET active = 1 - active WHERE id = ?", (plan_id,))
         await db.commit()
 
 
-async def add_multi_plan(label: str, price: int):
+async def add_multi_plan(label: str, price_gram, price_trx, price_usdt, price_stars):
     async with _open_db() as db:
-        await db.execute("INSERT INTO multi_plans (label, price, active) VALUES (?, ?, 1)", (label, price))
+        await db.execute(
+            """INSERT INTO multi_plans (label, price, price_gram, price_trx, price_usdt, price_stars, active)
+               VALUES (?, 0, ?, ?, ?, ?, 1)""",
+            (label, price_gram, price_trx, price_usdt, price_stars),
+        )
         await db.commit()
 
 
@@ -436,12 +486,14 @@ async def deduct_wallet_balance(user_id: int, amount: int) -> bool:
         return True
 
 
-async def create_wallet_topup(user_id: int, username: str, full_name: str, amount: int) -> int:
+async def create_wallet_topup(
+    user_id: int, username: str, full_name: str, amount: int, currency: str = "usdt"
+) -> int:
     async with _open_db() as db:
         cursor = await db.execute(
-            """INSERT INTO wallet_topups (user_id, username, full_name, amount, status, created_at)
-               VALUES (?, ?, ?, ?, 'awaiting_receipt', ?)""",
-            (user_id, username, full_name, amount, datetime.now().isoformat()),
+            """INSERT INTO wallet_topups (user_id, username, full_name, amount, currency, status, created_at)
+               VALUES (?, ?, ?, ?, ?, 'awaiting_receipt', ?)""",
+            (user_id, username, full_name, amount, currency, datetime.now().isoformat()),
         )
         await db.commit()
         return cursor.lastrowid

@@ -16,6 +16,8 @@ from aiogram.types import (
     InlineKeyboardButton,
     ReplyKeyboardMarkup,
     KeyboardButton,
+    LabeledPrice,
+    PreCheckoutQuery,
 )
 
 import config
@@ -169,6 +171,48 @@ def back_menu_kb() -> InlineKeyboardMarkup:
     )
 
 
+# ---------- پرداخت‌های رمزارزی ----------
+CURRENCIES = {
+    "gram": {"icon": "🪙", "name": "GRAM (TON)", "wallet": config.GRAM_WALLET, "note": "شبکه TON"},
+    "trx": {"icon": "🔴", "name": "TRX (TRON)", "wallet": config.TRX_WALLET, "note": "شبکه TRON"},
+    "usdt": {"icon": "💵", "name": "USDT (TRC-20)", "wallet": config.USDT_WALLET, "note": "شبکه TRON (TRC-20)"},
+    "stars": {"icon": "⭐", "name": "استارز تلگرام", "wallet": None, "note": "پرداخت مستقیم از تلگرام"},
+}
+
+
+def fmt_amount(value) -> str:
+    """نمایش تمیز مبلغ ارز دیجیتال (بدون صفرهای اضافه)."""
+    if value is None or value == "":
+        return "—"
+    f = float(value)
+    if f == int(f):
+        return str(int(f))
+    return f"{f:g}"
+
+
+def plan_prices(plan) -> dict:
+    return {
+        "gram": plan["price_gram"],
+        "trx": plan["price_trx"],
+        "usdt": plan["price_usdt"],
+        "stars": plan["price_stars"],
+    }
+
+
+async def get_price_after_discount(order: dict) -> float:
+    """اعمال درصد کد تخفیف روی مبلغ انتخابی سفارش (charge مقدار order.amount)."""
+    amount = 0.0
+    try:
+        amount = float(order["amount"])
+    except (TypeError, ValueError):
+        return 0.0
+    if order.get("coupon_code"):
+        coupon = await db.get_coupon(order["coupon_code"])
+        if coupon and coupon["active"] and coupon["percent"]:
+            amount = amount * (100 - coupon["percent"]) / 100
+    return round(amount, 6)
+
+
 def services_kb() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="🌍 سرویس ها", callback_data="svc:multi")],
@@ -178,18 +222,29 @@ def services_kb() -> InlineKeyboardMarkup:
 
 
 def multi_plans_kb(plans) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(text=f"{p['label']} - {p['price']:,} تومان", callback_data=f"mplan:{p['id']}")]
-        for p in plans
-    ]
+    rows = []
+    for p in plans:
+        gram = fmt_amount(p["price_gram"])
+        rows.append(
+            [InlineKeyboardButton(text=f"🌍 {p['label']} — 🪙 {gram} GRAM", callback_data=f"mplan:{p['id']}")]
+        )
     rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="back:services")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def build_order_summary_kb(order) -> InlineKeyboardMarkup:
-    """کیبورد صفحه خلاصه سفارش: ارسال رسید، کد تخفیف، پرداخت با کیف پول (در صورت کافی بودن موجودی) یا بازگشت."""
-    rows = [[InlineKeyboardButton(text="📤 ارسال رسید", callback_data=f"reqreceipt:{order['id']}")]]
-
+def build_order_summary_kb(order) -> InlineKeyboardMarkup:
+    """کیبورد صفحه خلاصه سفارش: انتخاب روش پرداخت + کد تخفیف."""
+    rows = []
+    for cur in ("gram", "trx", "usdt", "stars"):
+        info = CURRENCIES[cur]
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{info['icon']} پرداخت با {info['name']}",
+                    callback_data=f"pay:{order['id']}:{cur}",
+                )
+            ]
+        )
     if order["coupon_code"]:
         rows.append(
             [
@@ -199,16 +254,43 @@ async def build_order_summary_kb(order) -> InlineKeyboardMarkup:
         )
     else:
         rows.append([InlineKeyboardButton(text="🎟 اعمال کد تخفیف", callback_data=f"applycoupon:{order['id']}")])
-
-    if order["price"] and order["price"] > 0:
-        balance = await db.get_wallet_balance(order["user_id"])
-        if balance >= order["price"]:
-            rows.append(
-                [InlineKeyboardButton(text=f"💰 پرداخت با کیف پول ({balance:,} تومان)", callback_data=f"walletpay:{order['id']}")]
-            )
-
     rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"cancelorder:{order['id']}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def payment_page_text(order) -> str:
+    """صفحه پرداخت برای ارز انتخابی (بعد از زدن روش پرداخت)."""
+    cur = order["currency"]
+    info = CURRENCIES.get(cur, CURRENCIES["usdt"])
+    amount = order["amount"]
+    lines = [
+        f"{info['icon']} <b>پرداخت با {info['name']}</b>",
+        "—————————————",
+        f"📦 {order['plan_name']}",
+    ]
+    if order["coupon_code"]:
+        lines.append(f"🎟 کد تخفیف: {order['coupon_code']}")
+    lines.append(f"💰 مبلغ: <b>{amount}</b> {cur.upper()}")
+    if info["wallet"]:
+        lines += [
+            f"🏦 آدرس کیف پول ({info['note']}):",
+            f"<code>{info['wallet']}</code>",
+            "",
+            "ℹ️ مبلغ دقیق بالا را به همین آدرس واریز کنید. توجه: انتقال اشتباه یا در شبکه اشتباه باعث مشکلات می‌شود!",
+        ]
+    else:
+        lines += ["⭐ پرداخت به‌صورت امن از داخل تلگرام انجام می‌شود.", ""]
+    lines.append("پس از واریز، دکمه «📤 ارسال رسید» را بزنید و رسید را ارسال کنید.")
+    return "\n".join(lines)
+
+
+def payment_page_kb(order_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📤 ارسال رسید", callback_data=f"reqreceipt:{order_id}")],
+            [InlineKeyboardButton(text="🔙 بازگشت به خلاصه", callback_data=f"backsummary:{order_id}")],
+        ]
+    )
 
 
 def waiting_receipt_kb(order_id: int) -> InlineKeyboardMarkup:
@@ -219,23 +301,25 @@ def waiting_receipt_kb(order_id: int) -> InlineKeyboardMarkup:
 
 
 def order_summary_text(order) -> str:
-    price_block = f"💰 قیمت: {order['price']:,} تومان"
+    plan = order["plan_name"]
+    lines = [
+        "🧾 <b>خلاصه سفارش شما</b>",
+        "—————————————",
+        f"📦 {plan}",
+    ]
     if order["coupon_code"]:
-        price_block = (
-            f"💵 قیمت اصلی: {order['original_price']:,} تومان\n"
-            f"🎟 کد تخفیف: {order['coupon_code']}\n"
-            f"💰 قیمت نهایی: {order['price']:,} تومان"
-        )
-    return (
-        f"🧾 <b>خلاصه سفارش شما</b>\n"
-        f"—————————————\n"
-        f"📦 {order['plan_name']}\n"
-        f"{price_block}\n"
-        f"—————————————\n\n"
-        f"💳 شماره کارت: <code>{config.CARD_NUMBER}</code>\n"
-        f"👤 به نام: {config.CARD_HOLDER}\n\n"
-        f"ℹ️ پس از واریز وجه، روی دکمه «📤 ارسال رسید» بزنید و سپس عکس یا فایل رسید رو ارسال کنید."
-    )
+        lines.append(f"🎟 کد تخفیف: {order['coupon_code']}")
+    lines.append("—————————————")
+    lines.append("💰 <b>روش پرداخت را انتخاب کنید:</b>")
+    for cur in ("gram", "trx", "usdt", "stars"):
+        info = CURRENCIES[cur]
+        price = order.get(f"price_{cur}")
+        if price is None or (isinstance(price, str) and price == ""):
+            lines.append(f"{info['icon']} {info['name']} : —")
+        else:
+            lines.append(f"{info['icon']} {info['name']}: <b>{fmt_amount(price)}</b>")
+    lines.append("—————————————")
+    return "\n".join(lines)
 
 
 def admin_decision_kb(order_id: int) -> InlineKeyboardMarkup:
