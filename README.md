@@ -12,13 +12,15 @@ A complete Telegram reseller bot for selling VPN/panel services with **card-to-c
 
 | | |
 |---|---|
-| 🛍️ **Service type** | Multi-location plans (web browsing, unlimited usage) |
+| 🛍️ **Service type** | Services (e.g. web browsing plans, unlimited usage) |
+| 📢 **Force join** | Require users to join your channel before using the bot (channel editable / removable by admin) |
+| 🧪 **Test service** | Admin-managed config stock; each user can grab one free test config every 5 days |
 | 💳 **Card-to-card payment** | Receipt upload → admin approval → auto delivery |
 | 💰 **Built-in wallet** | Instant wallet payment, admin top-up approval, tiered recharge bonus |
 | 🤝 **Permanent referral commission** | % of every successful purchase credited instantly to the referrer's wallet |
 | 🎟️ **Discount codes** | Admin-created coupons with custom percent & usage capacity |
 | 🖥️ **"My Services"** | Every order with live status + delivered configs kept per user |
-| 🛠️ **Full admin panel** | Tariffs, welcome text, rules, referral % , coupons, wallet bonus — all editable from inside the bot |
+| 🛠️ **Full admin panel** | Tariffs, welcome text, rules, referral %, coupons, wallet bonus, force join, test config stock — all editable from inside the bot |
 | 🛡️ **Rate limiting** | Built-in anti-spam middleware (0.7s messages / 0.4s callbacks) |
 | 🗄️ **SQLite + WAL** | Zero external DB, crash-proof path handling, fast concurrent reads |
 
@@ -98,6 +100,7 @@ The bot is now **crash-proof**: it auto-creates the database directory on startu
 🛍️ Buy Service  |  🖥️ My Services
 💰 Wallet       |  💬 Support
 🤝 Invite       |  📜 Rules
+🧪 Test Service
 🛠️ Manage Bot   (admins only)
 ```
 
@@ -116,6 +119,8 @@ Admin gets the order with **✅ Approve / ❌ Reject** buttons. After approval, 
 - **🤝 Referral settings** — cash commission percent per successful referral purchase
 - **🎟️ Discount codes** — create/enable/disable/delete coupons
 - **💳 Wallet recharge bonus** — tiered threshold + bonus percent
+- **📢 Force join** — set/change/remove the channel users must join before using the bot (the bot must be admin of that channel)
+- **🧪 Test config stock** — add configs one by one (name / volume / days / link), delete individual or clear all; every user who claims a test service consumes exactly one config
 
 All settings persist in SQLite — they survive restarts as long as the volume is mounted.
 

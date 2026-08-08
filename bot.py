@@ -171,7 +171,7 @@ def back_menu_kb() -> InlineKeyboardMarkup:
 
 def services_kb() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text="🌍 سرویس مولتی لوکیشن (وبگردی)", callback_data="svc:multi")],
+        [InlineKeyboardButton(text="🌍 سرویس ها", callback_data="svc:multi")],
         [InlineKeyboardButton(text="🔙 بازگشت به منو", callback_data="back:menu")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -286,7 +286,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             f"✨ <b>{config.BRAND_NAME}</b> ✨\n\n"
             f"👋 به پلتفرم فروش سرویس {config.BRAND_NAME} خوش اومدید\n\n"
             f"🎁 <b>چی دریافت می‌کنید؟</b>\n"
-            f"🌍 سرویس مولتی لوکیشن (وبگردی) با پلن نامحدود\n\n"
+            f"🌍 سرویس ها با پلن نامحدود\n\n"
             f"🟢 سرویس فعال دارید؟ از دکمه «🖥 سرویس‌های من» وارد شوید"
         )
     await message.answer(text, parse_mode="HTML", reply_markup=main_menu_kb(message.from_user.id))
@@ -309,7 +309,7 @@ async def force_join_check(callback: CallbackQuery):
         f"✨ <b>{config.BRAND_NAME}</b> ✨\n\n"
         f"👋 به پلتفرم فروش سرویس {config.BRAND_NAME} خوش اومدید\n\n"
         f"🎁 <b>چی دریافت می‌کنید؟</b>\n"
-        f"🌍 سرویس مولتی لوکیشن (وبگردی) با پلن نامحدود\n\n"
+        f"🌍 سرویس ها با پلن نامحدود\n\n"
         f"🟢 سرویس فعال دارید؟ از دکمه «🖥 سرویس‌های من» وارد شوید"
     )
     try:
@@ -357,7 +357,7 @@ async def cancel_order_and_go_back(callback: CallbackQuery, state: FSMContext):
         await callback.answer("در حال حاضر تعرفه‌ای برای این سرویس ثبت نشده.", show_alert=True)
         return
     await callback.message.edit_text(
-        "🌍 <b>سرویس مولتی لوکیشن (وبگردی)</b>\nتعرفه مورد نظر رو انتخاب کنید:",
+        "🌍 <b>سرویس ها</b>\nتعرفه مورد نظر رو انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=multi_plans_kb(plans),
     )
@@ -371,7 +371,7 @@ async def choose_multi_service(callback: CallbackQuery, state: FSMContext):
         await callback.answer("در حال حاضر تعرفه‌ای برای این سرویس ثبت نشده.", show_alert=True)
         return
     await callback.message.edit_text(
-        "🌍 <b>سرویس مولتی لوکیشن (وبگردی)</b>\nتعرفه مورد نظر رو انتخاب کنید:",
+        "🌍 <b>سرویس ها</b>\nتعرفه مورد نظر رو انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=multi_plans_kb(plans),
     )
@@ -386,7 +386,7 @@ async def choose_multi_plan(callback: CallbackQuery, state: FSMContext):
         await callback.answer("این تعرفه دیگر موجود نیست.", show_alert=True)
         return
 
-    plan_name = f"🌍 سرویس مولتی لوکیشن - {plan['label']}"
+    plan_name = f"🌍 سرویس - {plan['label']}"
 
     order_id = await db.create_order(
         user_id=callback.from_user.id,
@@ -1123,7 +1123,7 @@ async def get_test_config(callback: CallbackQuery):
 def admin_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🌍 تعرفه‌های مولتی لوکیشن", callback_data="admintariff:multi")],
+            [InlineKeyboardButton(text="🌍 تعرفه‌های سرویس ها", callback_data="admintariff:multi")],
             [InlineKeyboardButton(text="✉️ پیام خوش‌آمدگویی", callback_data="adminwelcome")],
             [InlineKeyboardButton(text="📜 ویرایش قوانین", callback_data="adminrules")],
             [InlineKeyboardButton(text="🎟 کدهای تخفیف", callback_data="admincoupons")],
@@ -1758,7 +1758,7 @@ async def admintariff_multi(callback: CallbackQuery, state: FSMContext):
         await callback.answer("شما دسترسی ادمین ندارید.", show_alert=True)
         return
     await callback.message.edit_text(
-        "🌍 <b>تعرفه‌های سرویس مولتی لوکیشن</b>\nروی هر تعرفه بزنید تا قیمتش رو تغییر بدید، یا فعال/غیرفعالش کنید:",
+        "🌍 <b>تعرفه‌های سرویس ها</b>\nروی هر تعرفه بزنید تا قیمتش رو تغییر بدید، یا فعال/غیرفعالش کنید:",
         parse_mode="HTML",
         reply_markup=await multi_admin_list_kb(),
     )

@@ -332,7 +332,7 @@ async def count_converted_referrals(referrer_id: int) -> int:
         return row[0] if row else 0
 
 
-# ---------- Multi-location plans (تعرفه سرویس مولتی لوکیشن) ----------
+# ---------- Plans (تعرفه سرویس ها) ----------
 async def get_multi_plans(active_only: bool = True):
     async with _open_db() as db:
         db.row_factory = aiosqlite.Row
